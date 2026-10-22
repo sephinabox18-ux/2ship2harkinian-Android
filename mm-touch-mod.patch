@@ -1,5 +1,189 @@
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
+new file mode 100644
+index 0000000..5b6d7d9
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
+@@ -0,0 +1,178 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.RectF;
++import android.graphics.Typeface;
++import android.util.TypedValue;
++import android.view.View;
++
++/**
++ * Slim HUD bar along the bottom of the screen: hearts, magic, rupees and a small clock.
++ * Replaces the vanilla hearts/magic/rupees and the big half-circle clock.
++ */
++public class HudBarView extends View {
++    private static final int GOLD = Color.rgb(222, 190, 110);
++
++    private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint heartFill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint heartEmpty = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint heartEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint magicFill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint magicTrack = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint gem = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint divider = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Path heart = new Path();
++    private final RectF r = new RectF();
++
++    // health (1/16 hearts), max health, magic, max magic, rupees, wallet, day, time, flags
++    private int[] hud = new int[9];
++
++    public HudBarView(Context c) {
++        super(c);
++        bg.setColor(Color.argb(170, 14, 12, 22));
++        border.setStyle(Paint.Style.STROKE);
++        border.setStrokeWidth(dp(1.5f));
++        border.setColor(Color.argb(150, 222, 190, 110));
++        heartFill.setColor(Color.rgb(214, 58, 52));
++        heartEmpty.setColor(Color.argb(110, 60, 20, 24));
++        heartEdge.setStyle(Paint.Style.STROKE);
++        heartEdge.setStrokeWidth(dp(1));
++        heartEdge.setColor(Color.argb(200, 255, 230, 220));
++        magicFill.setColor(Color.rgb(70, 190, 90));
++        magicTrack.setColor(Color.argb(120, 20, 40, 24));
++        text.setColor(Color.rgb(243, 233, 210));
++        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        text.setTextSize(dp(13));
++        text.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
++        gem.setColor(Color.rgb(80, 200, 110));
++        divider.setColor(Color.argb(90, 222, 190, 110));
++        divider.setStrokeWidth(dp(1));
++    }
++
++    public void setHud(int[] values) {
++        if (values == null || values.length < 9) return;
++        boolean changed = false;
++        for (int i = 0; i < 9; i++) {
++            // the clock ticks constantly; only redraw when the minute changes
++            int v = (i == 7) ? (values[i] * 24 * 60 / 65536) : values[i];
++            int old = (i == 7) ? (hud[i] * 24 * 60 / 65536) : hud[i];
++            if (v != old) changed = true;
++        }
++        hud = values.clone();
++        if (changed) invalidate();
++    }
++
++    private float dp(float v) {
++        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++    }
++
++    private void heartPath(float cx, float cy, float s) {
++        heart.reset();
++        heart.moveTo(cx, cy + s * 0.45f);
++        heart.cubicTo(cx - s * 0.95f, cy - s * 0.15f, cx - s * 0.45f, cy - s * 0.85f, cx, cy - s * 0.35f);
++        heart.cubicTo(cx + s * 0.45f, cy - s * 0.85f, cx + s * 0.95f, cy - s * 0.15f, cx, cy + s * 0.45f);
++        heart.close();
++    }
++
++    @Override
++    protected void onDraw(Canvas c) {
++        float w = getWidth(), h = getHeight();
++        r.set(dp(1), dp(1), w - dp(1), h - dp(1));
++        c.drawRoundRect(r, h / 2, h / 2, bg);
++        c.drawRoundRect(r, h / 2, h / 2, border);
++
++        float x = h * 0.55f;
++        float mid = h / 2;
++
++        // Hearts: up to 10 per row, two rows when there are more
++        int maxHearts = Math.max(1, hud[1] / 16);
++        int health = hud[0];
++        boolean twoRows = maxHearts > 10;
++        float hs = twoRows ? dp(8.5f) : dp(11f);
++        float step = hs * 1.15f;
++        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE : Color.argb(200, 255, 230, 220));
++        for (int i = 0; i < maxHearts; i++) {
++            int row = twoRows ? i / 10 : 0;
++            int col = twoRows ? i % 10 : i;
++            float cx = x + col * step + hs / 2;
++            float cy = twoRows ? (mid - hs * 0.55f + row * hs * 1.1f) : mid;
++            heartPath(cx, cy, hs);
++            c.drawPath(heart, heartEmpty);
++            int fill = Math.max(0, Math.min(16, health - i * 16));
++            if (fill > 0) {
++                c.save();
++                c.clipRect(cx - hs, cy - hs, cx - hs + 2 * hs * fill / 16f, cy + hs);
++                c.drawPath(heart, heartFill);
++                c.restore();
++            }
++            c.drawPath(heart, heartEdge);
++        }
++        x += Math.min(maxHearts, 10) * step + dp(10);
++
++        // Magic
++        if (hud[3] > 0) {
++            float len = dp(hud[3] * 0.9f);
++            float bh = dp(7);
++            r.set(x, mid - bh / 2, x + len, mid + bh / 2);
++            c.drawRoundRect(r, bh / 2, bh / 2, magicTrack);
++            r.set(x, mid - bh / 2, x + len * Math.max(0, Math.min(1f, hud[2] / (float) hud[3])), mid + bh / 2);
++            c.drawRoundRect(r, bh / 2, bh / 2, magicFill);
++            x += len + dp(12);
++        }
++
++        c.drawLine(x, mid - dp(9), x, mid + dp(9), divider);
++        x += dp(12);
++
++        // Rupees
++        float g = dp(6);
++        heart.reset();
++        heart.moveTo(x + g, mid - g * 1.3f);
++        heart.lineTo(x + 2 * g, mid);
++        heart.lineTo(x + g, mid + g * 1.3f);
++        heart.lineTo(x, mid);
++        heart.close();
++        c.drawPath(heart, gem);
++        x += 2 * g + dp(6);
++        boolean full = hud[4] >= hud[5] && hud[5] > 0;
++        text.setColor(full ? Color.rgb(120, 230, 140) : Color.rgb(243, 233, 210));
++        String rupees = String.valueOf(hud[4]);
++        c.drawText(rupees, x, mid + text.getTextSize() * 0.35f, text);
++        x += text.measureText(rupees) + dp(12);
++        text.setColor(Color.rgb(243, 233, 210));
++
++        c.drawLine(x, mid - dp(9), x, mid + dp(9), divider);
++        x += dp(12);
++
++        // Clock: day + time, sun or moon
++        int minutes = hud[7] * 24 * 60 / 65536;
++        int hr = minutes / 60, mn = minutes % 60;
++        boolean night = (hud[8] & 2) != 0;
++        String ampm = hr < 12 ? "AM" : "PM";
++        int hr12 = hr % 12 == 0 ? 12 : hr % 12;
++        int day = Math.max(1, Math.min(3, hud[6]));
++        String clock = (night ? "\u263E " : "\u2600 ") + "Day " + day + " \u00B7 " + hr12 + ":" + (mn < 10 ? "0" : "") + mn + " " + ampm;
++        if (day == 3 && night) text.setColor(Color.rgb(240, 120, 100)); // final night: a gentle warning
++        c.drawText(clock, x, mid + text.getTextSize() * 0.35f, text);
++    }
++
++    /** Width the bar wants for the current values. */
++    public int preferredWidth() {
++        int maxHearts = Math.max(1, hud[1] / 16);
++        float hs = maxHearts > 10 ? dp(8.5f) : dp(11f);
++        float w = getHeightGuess() * 0.55f + Math.min(maxHearts, 10) * hs * 1.15f + dp(10);
++        if (hud[3] > 0) w += dp(hud[3] * 0.9f) + dp(12);
++        w += dp(24) + dp(18) + text.measureText("9999") + dp(24);
++        w += text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(18);
++        return (int) w;
++    }
++
++    private float getHeightGuess() {
++        return dp(36);
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..f8431a1 100644
+index fe546c8..89b3d71 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
@@ -12,7 +196,7 @@ index fe546c8..f8431a1 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +958,20 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +958,22 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -29,11 +213,13 @@ index fe546c8..f8431a1 100644
 +    public native int[] nativeMmGetItemIcon(int item);
 +    public native int[] nativeMmGetPauseGrid();
 +    public native void nativeMmPauseSelect(int slot);
++    public native void nativeMmSetOption(int option, int value);
++    public native int[] nativeMmGetHud();
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +979,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +981,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -45,10 +231,10 @@ index fe546c8..f8431a1 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..f57bf33
+index 0000000..6d07f39
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1319 @@
+@@ -0,0 +1,1480 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -56,7 +242,9 @@ index 0000000..f57bf33
 +import android.graphics.Bitmap;
 +import android.graphics.Color;
 +import android.graphics.Typeface;
++import android.graphics.drawable.Drawable;
 +import android.graphics.drawable.GradientDrawable;
++import android.graphics.drawable.LayerDrawable;
 +import android.os.Handler;
 +import android.os.Looper;
 +import android.util.TypedValue;
@@ -90,7 +278,7 @@ index 0000000..f57bf33
 +            ACT_TRAIL = 7;
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
-+            ST_PAUSED = 64, ST_PAUSE_GRID = 128;
++            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
@@ -115,10 +303,100 @@ index 0000000..f57bf33
 +    private Ctl questCtl, skipCtl, sprintCtl;
 +    private TextView questWhere, questTitle, questText;
 +
++    // Names for the items/masks shown in the touch pause grid (index = item id)
++    private static final String[] ITEM_NAMES = {
++            "Ocarina of Time",
++            "Hero's Bow",
++            "Fire Arrow",
++            "Ice Arrow",
++            "Light Arrow",
++            "Fairy Ocarina",
++            "Bomb",
++            "Bombchu",
++            "Deku Stick",
++            "Deku Nut",
++            "Magic Bean",
++            "Slingshot",
++            "Powder Keg",
++            "Pictograph Box",
++            "Lens of Truth",
++            "Hookshot",
++            "Great Fairy's Sword",
++            "Longshot",
++            "Empty Bottle",
++            "Red Potion",
++            "Green Potion",
++            "Blue Potion",
++            "Fairy",
++            "Deku Princess",
++            "Milk",
++            "Milk (half)",
++            "Fish",
++            "Bug",
++            "Blue Fire",
++            "Poe",
++            "Big Poe",
++            "Spring Water",
++            "Hot Spring Water",
++            "Zora Egg",
++            "Gold Dust",
++            "Magical Mushroom",
++            "Seahorse",
++            "Chateau Romani",
++            "Hylian Loach",
++            "Mystery Milk",
++            "Moon's Tear",
++            "Land Title Deed",
++            "Swamp Title Deed",
++            "Mountain Title Deed",
++            "Ocean Title Deed",
++            "Room Key",
++            "Express Mail to Mama",
++            "Letter to Kafei",
++            "Pendant of Memories",
++            "Tingle's Map",
++            "Deku Mask",
++            "Goron Mask",
++            "Zora Mask",
++            "Fierce Deity's Mask",
++            "Mask of Truth",
++            "Kafei's Mask",
++            "All-Night Mask",
++            "Bunny Hood",
++            "Keaton Mask",
++            "Garo's Mask",
++            "Romani's Mask",
++            "Circus Leader's Mask",
++            "Postman's Hat",
++            "Couple's Mask",
++            "Great Fairy's Mask",
++            "Gibdo Mask",
++            "Don Gero's Mask",
++            "Kamaro's Mask",
++            "Captain's Hat",
++            "Stone Mask",
++            "Bremen Mask",
++            "Blast Mask",
++            "Mask of Scents",
++            "Giant's Mask",
++            "Fire Arrow",
++            "Ice Arrow",
++            "Light Arrow"
++    };
++
++    private static String itemName(int item) {
++        return (item >= 0 && item < ITEM_NAMES.length) ? ITEM_NAMES[item] : "";
++    }
++
 +    // Item icons (from the game's own textures) for the C buttons and the touch pause grid
 +    private final HashMap<Integer, Bitmap> iconCache = new HashMap<>();
 +    private LinearLayout pausePanel, pauseGridBox;
-+    private TextView pauseTitle, pauseHint;
++    private TextView pauseTitle, pauseHint, pauseItemName;
++    private boolean touchOnlyPause;
++    private boolean modernHud;
++    private HudBarView hudBar;
++    private TextView hudTypeLabel;
++    private TextView pauseTypeLabel;
 +    private final TextView[] gridLabels = new TextView[24];
 +    private final ImageView[] gridIcons = new ImageView[24];
 +    private final FrameLayout[] gridTiles = new FrameLayout[24];
@@ -185,6 +463,8 @@ index 0000000..f57bf33
 +        camSens = prefs.getFloat("camSens", 1.0f);
 +        stickSens = prefs.getFloat("stickSens", 1.0f);
 +        fixedStick = prefs.getBoolean("fixedStick", false);
++        touchOnlyPause = prefs.getBoolean("touchOnlyPause", true);
++        modernHud = prefs.getBoolean("modernHud", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -242,6 +522,7 @@ index 0000000..f57bf33
 +            if (c.kind == KIND_PANEL) buildQuestPanel(c);
 +            else buildCtl(c);
 +        }
++        buildHudBar();
 +        buildSongsPanel();
 +        buildPausePanel();
 +        buildSettingsPanel();
@@ -252,6 +533,8 @@ index 0000000..f57bf33
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> layoutAll());
 +        act.nativeMmSetOverlayActive(true);
++        act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
++        act.nativeMmSetOption(2, modernHud ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -328,6 +611,7 @@ index 0000000..f57bf33
 +
 +            updateCIcons();
 +            updatePausePanel();
++            updateHudBar();
 +
 +            String msg = act.nativeMmPollMessage();
 +            if (msg != null && !msg.isEmpty()) showToast(msg);
@@ -370,6 +654,7 @@ index 0000000..f57bf33
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
 +            pausePanel.setVisibility(View.GONE);
++            hudBar.setVisibility(View.GONE);
 +            settingsPanel.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
 +            closeMenuBtn.setVisibility(View.VISIBLE);
@@ -400,22 +685,35 @@ index 0000000..f57bf33
 +        return v;
 +    }
 +
-+    private GradientDrawable styleFor(int style, boolean active) {
++    // Buttons: dark glass discs with a coloured rim (blue A, green B, gold C, muted red Start)
++    // and a faint inner gold ring - Zelda HUD colours without being loud.
++    private Drawable styleFor(int style, boolean active) {
++        int rim;
 +        switch (style) {
-+            case STYLE_A: return discDrawable(Color.argb(175, 38, 92, 205), Color.rgb(150, 195, 255), 3);
-+            case STYLE_B: return discDrawable(Color.argb(175, 36, 140, 64), Color.rgb(160, 230, 165), 3);
-+            case STYLE_C: return discDrawable(Color.argb(175, 214, 168, 24), Color.rgb(255, 232, 130), 3);
-+            case STYLE_START: return discDrawable(Color.argb(175, 178, 40, 40), Color.rgb(255, 160, 150), 2);
-+            default:
-+                return discDrawable(active ? Color.argb(185, 200, 140, 40) : Color.argb(150, 18, 16, 28),
-+                        active ? Color.rgb(255, 220, 140) : GOLD_SOFT, 2);
++            case STYLE_A: rim = Color.rgb(104, 152, 226); break;
++            case STYLE_B: rim = Color.rgb(112, 186, 120); break;
++            case STYLE_C: rim = Color.rgb(222, 186, 84); break;
++            case STYLE_START: rim = Color.rgb(196, 98, 84); break;
++            default: rim = active ? Color.rgb(246, 210, 130) : Color.rgb(196, 170, 112); break;
 +        }
++        GradientDrawable base = new GradientDrawable();
++        base.setShape(GradientDrawable.OVAL);
++        base.setColor(active ? Color.argb(190, 120, 86, 32) : Color.argb(150, 16, 14, 24));
++        base.setStroke(dp(2.5f), rim);
++        GradientDrawable inner = new GradientDrawable();
++        inner.setShape(GradientDrawable.OVAL);
++        inner.setColor(Color.TRANSPARENT);
++        inner.setStroke(dp(1), Color.argb(70, 255, 240, 200));
++        LayerDrawable layers = new LayerDrawable(new Drawable[] { base, inner });
++        int inset = dp(5);
++        layers.setLayerInset(1, inset, inset, inset, inset);
++        return layers;
 +    }
 +
 +    private TextView hudText(float sp) {
 +        TextView t = new TextView(act);
-+        t.setTextColor(Color.WHITE);
-+        t.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
++        t.setTextColor(Color.rgb(243, 233, 210));
++        t.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +        t.setShadowLayer(5f, 0f, 2f, Color.BLACK);
 +        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
 +        return t;
@@ -571,6 +869,29 @@ index 0000000..f57bf33
 +        }
 +    }
 +
++    // ---------------------------------------------------------------- slim HUD bar
++    private void buildHudBar() {
++        hudBar = new HudBarView(act);
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(420), dp(36));
++        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
++        lp.bottomMargin = dp(8);
++        root.addView(hudBar, lp);
++        hudBar.setVisibility(View.GONE);
++    }
++
++    private void updateHudBar() {
++        boolean show = modernHud && !editing && ((stateBits & ST_GAMEPLAY) != 0);
++        hudBar.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (!show) return;
++        hudBar.setHud(act.nativeMmGetHud());
++        int want = hudBar.preferredWidth();
++        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) hudBar.getLayoutParams();
++        if (Math.abs(lp.width - want) > dp(4)) {
++            lp.width = want;
++            hudBar.setLayoutParams(lp);
++        }
++    }
++
 +    // ---------------------------------------------------------------- touch pause menu
 +    private void buildPausePanel() {
 +        pausePanel = new LinearLayout(act);
@@ -631,6 +952,14 @@ index 0000000..f57bf33
 +        }
 +        pausePanel.addView(pauseGridBox);
 +
++        pauseItemName = new TextView(act);
++        pauseItemName.setTextColor(Color.WHITE);
++        pauseItemName.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        pauseItemName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
++        pauseItemName.setGravity(Gravity.CENTER);
++        pauseItemName.setPadding(0, dp(6), 0, 0);
++        pausePanel.addView(pauseItemName);
++
 +        pauseHint = new TextView(act);
 +        pauseHint.setText("Tap an item, then tap a C button to put it there \u00B7 A = description");
 +        pauseHint.setTextColor(Color.argb(190, 255, 255, 255));
@@ -684,6 +1013,8 @@ index 0000000..f57bf33
 +                }
 +            }
 +        }
++        int cursorItem = (g[1] >= 0 && g[1] < 24) ? g[2 + g[1]] : 255;
++        pauseItemName.setText(cursorItem == 255 ? "" : itemName(cursorItem));
 +        if (g[1] != gridCursorShown) {
 +            for (int i = 0; i < 24; i++) {
 +                GradientDrawable bg = (GradientDrawable) gridTiles[i].getBackground();
@@ -747,6 +1078,20 @@ index 0000000..f57bf33
 +            layoutAll();
 +        });
 +
++        pauseTypeLabel = settingsRow(settingsPanel, "Pause screen", null, null, "Change", () -> {
++            touchOnlyPause = !touchOnlyPause;
++            prefs.edit().putBoolean("touchOnlyPause", touchOnlyPause).apply();
++            act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
++            refreshSettings();
++        });
++
++        hudTypeLabel = settingsRow(settingsPanel, "Game HUD", null, null, "Change", () -> {
++            modernHud = !modernHud;
++            prefs.edit().putBoolean("modernHud", modernHud).apply();
++            act.nativeMmSetOption(2, modernHud ? 1 : 0);
++            refreshSettings();
++        });
++
 +        LinearLayout bottom = new LinearLayout(act);
 +        bottom.setOrientation(LinearLayout.HORIZONTAL);
 +        bottom.addView(editButton("Reset camera learning", v -> {
@@ -790,6 +1135,8 @@ index 0000000..f57bf33
 +        stickSensLabel.setText(String.format(java.util.Locale.US, "%.1f\u00D7", stickSens));
 +        camTypeLabel.setText(swipeCamera ? "Swipe" : "Stick");
 +        stickTypeLabel.setText(fixedStick ? "Fixed" : "Dynamic");
++        pauseTypeLabel.setText(touchOnlyPause ? "Touch only" : "Both");
++        hudTypeLabel.setText(modernHud ? "Slim bar" : "Original");
 +    }
 +
 +    private TextView trailTile, questTile, hideTile;
@@ -2546,10 +2893,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..74d486e
+index 0000000..3d53bce
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,711 @@
+@@ -0,0 +1,888 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -2559,6 +2906,8 @@ index 0000000..74d486e
 +#include "2s2h/ShipInit.hpp"
 +#include "2s2h/Enhancements/Saving/SavingEnhancements.h"
 +#include <libultraship/bridge/resourcebridge.h>
++#include <ship/Context.h>
++#include <fstream>
 +#include "fast/resource/type/Texture.h"
 +#include <atomic>
 +#include <mutex>
@@ -2603,6 +2952,7 @@ index 0000000..74d486e
 +enum {
 +    ST_CAN_SKIP = 1 << 0, ST_OCARINA = 1 << 1, ST_SHOW_QUEST = 1 << 2, ST_SPRINT = 1 << 3, ST_TRAIL = 1 << 4,
 +    ST_SKIPPING = 1 << 5, ST_PAUSED = 1 << 6, ST_PAUSE_GRID = 1 << 7, // item or mask page ready for touch
++    ST_GAMEPLAY = 1 << 8, // normal play (not paused, not in a cutscene): show the HUD bar
 +};
 +
 +// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
@@ -2615,6 +2965,18 @@ index 0000000..74d486e
 +static std::atomic<int> sPauseSelect{ -1 };
 +static int sPauseItems[24];
 +static std::mutex sPauseMutex;
++extern "C" volatile s32 gMmTouchOverlayActive;
++static std::atomic<int> sTouchOnlyPause{ 1 }; // hide the original pause graphics on the Items/Masks pages
++static std::atomic<int> sModernHud{ -1 };     // requested HUD style (1 modern bar, 0 original), applied on game thread
++static std::atomic<int> sHud[9];              // health, max, magic, maxMagic, rupees, maxRupees, day, time, flags
++
++// Called from KaleidoScope_Draw: true = skip drawing the original pause pages (the touch panel replaces them)
++extern "C" s32 MMMod_HidePauseGraphics(PlayState* play) {
++    PauseContext* pauseCtx = &play->pauseCtx;
++    if (!sTouchOnlyPause.load() || !gMmTouchOverlayActive) return false;
++    if (IS_PAUSE_STATE_GAMEOVER(pauseCtx) || (pauseCtx->debugEditor != DEBUG_EDITOR_NONE)) return false;
++    return (pauseCtx->pageIndex == PAUSE_ITEM) || (pauseCtx->pageIndex == PAUSE_MASK);
++}
 +
 +static void LoadIcon(int item) {
 +    std::vector<int> out;
@@ -2831,15 +3193,50 @@ index 0000000..74d486e
 +}
 +
 +// ---------------------------------------------------------------- quick save / quick load
++// Quick save stores everything about the game plus Link's exact spot, in memory and in a file on the phone,
++// so quick load works after restarting the app too (even from the title screen / file select).
++#define QS_MAGIC 0x4D4D5153 // "MMQS"
++#define QS_VERSION 2
++
 +typedef struct {
++    u32 magic;
++    u32 version;
++    u32 size;
++    s16 fileNum;
 +    Save save;
 +    u8 eventInf[8];
 +    CycleSceneFlags cycleSceneFlags[120];
++    ShipSaveContext shipSaveContext;
++    RespawnData respawn; // exact position (entrance, room, pos, facing)
 +} QuickSnapshot;
 +
 +static QuickSnapshot* sSnap = nullptr;
 +static bool sHaveSnap = false;
 +static bool sPendingLoad = false;
++
++static std::string QuickSavePath() {
++    return Ship::Context::GetPathRelativeToAppDirectory("mm_quicksave.bin");
++}
++
++static void WriteSnapshotFile() {
++    std::ofstream f(QuickSavePath(), std::ios::binary | std::ios::trunc);
++    if (f) f.write((const char*)sSnap, sizeof(QuickSnapshot));
++}
++
++static void ReadSnapshotFile() {
++    std::ifstream f(QuickSavePath(), std::ios::binary);
++    if (!f) return;
++    QuickSnapshot* tmp = new QuickSnapshot();
++    f.read((char*)tmp, sizeof(QuickSnapshot));
++    if (f.gcount() == (std::streamsize)sizeof(QuickSnapshot) && tmp->magic == QS_MAGIC && tmp->version == QS_VERSION &&
++        tmp->size == sizeof(QuickSnapshot)) {
++        delete sSnap;
++        sSnap = tmp;
++        sHaveSnap = true;
++    } else {
++        delete tmp;
++    }
++}
 +
 +static bool CanQuickSave(PlayState* play) {
 +    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return false;
@@ -2853,6 +3250,8 @@ index 0000000..74d486e
 +        return false;
 +    }
 +    if (play->gameOverCtx.state != GAMEOVER_INACTIVE) return false;
++    Player* player = GET_PLAYER(play);
++    if ((player == nullptr) || !(player->actor.bgCheckFlags & BGCHECKFLAG_GROUND)) return false; // not mid-air
 +    return true;
 +}
 +
@@ -2879,15 +3278,40 @@ index 0000000..74d486e
 +        PostMessage("Can't quick save right now");
 +        return;
 +    }
++    Player* player = GET_PLAYER(play);
 +    if (sSnap == nullptr) sSnap = new QuickSnapshot();
 +    Play_SaveCycleSceneFlags(play);
++    sSnap->magic = QS_MAGIC;
++    sSnap->version = QS_VERSION;
++    sSnap->size = sizeof(QuickSnapshot);
++    sSnap->fileNum = gSaveContext.fileNum;
 +    memcpy(&sSnap->save, &gSaveContext.save, sizeof(Save));
 +    memcpy(sSnap->eventInf, gSaveContext.eventInf, sizeof(sSnap->eventInf));
 +    memcpy(sSnap->cycleSceneFlags, gSaveContext.cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
++    memcpy(&sSnap->shipSaveContext, &gSaveContext.shipSaveContext, sizeof(ShipSaveContext));
++
++    // Link's exact spot (same data the game uses to put you back after falling off a ledge)
++    memset(&sSnap->respawn, 0, sizeof(RespawnData));
++    sSnap->respawn.entrance = gSaveContext.save.entrance;
++    sSnap->respawn.roomIndex = play->roomCtx.curRoom.num;
++    sSnap->respawn.pos = player->actor.world.pos;
++    sSnap->respawn.yaw = player->actor.shape.rot.y;
++    sSnap->respawn.playerParams = PLAYER_PARAMS(0xFF, PLAYER_START_MODE_D);
++    sSnap->respawn.tempSwitchFlags = play->actorCtx.sceneFlags.switches[2];
++    sSnap->respawn.unk_18 = play->actorCtx.sceneFlags.collectible[1];
++    sSnap->respawn.tempCollectFlags = play->actorCtx.sceneFlags.collectible[2];
++
 +    sHaveSnap = true;
++    WriteSnapshotFile();
 +    SaveToDisk(play);
 +    Audio_PlaySfx(NA_SE_SY_DECIDE);
 +    PostMessage("Quick saved");
++}
++
++static void ApplySnapshotRespawn() {
++    gSaveContext.respawn[RESPAWN_MODE_DOWN] = sSnap->respawn;
++    gSaveContext.nextTransitionType = TRANS_TYPE_FADE_BLACK_FAST;
++    gSaveContext.respawnFlag = -8; // spawn at the stored position (as 2 Ship's warp points do)
 +}
 +
 +static void QuickLoad(PlayState* play) {
@@ -2904,12 +3328,47 @@ index 0000000..74d486e
 +        return;
 +    }
 +    sPendingLoad = true;
-+    gSaveContext.respawnFlag = 0;
 +    gSaveContext.nextCutsceneIndex = 0;
-+    play->nextEntrance = sSnap->save.entrance;
++    ApplySnapshotRespawn();
++    play->nextEntrance = sSnap->respawn.entrance;
 +    play->transitionTrigger = TRANS_TRIGGER_START;
-+    play->transitionType = TRANS_TYPE_FADE_BLACK;
++    play->transitionType = TRANS_TYPE_FADE_BLACK_FAST;
 +    PostMessage("Quick loading...");
++}
++
++// From the title screen / file select: load the quick save straight into the game.
++static void BootQuickLoad() {
++    if (!sHaveSnap || (gGameState == nullptr)) return;
++    gSaveContext.gameMode = GAMEMODE_NORMAL;
++    gSaveContext.fileNum = sSnap->fileNum;
++    memcpy(&gSaveContext.save, &sSnap->save, sizeof(Save));
++    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
++    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
++    memcpy(&gSaveContext.shipSaveContext, &sSnap->shipSaveContext, sizeof(ShipSaveContext));
++    GameInteractor_ExecuteOnSaveLoad(gSaveContext.fileNum);
++
++    // Runtime state a normal file load sets up (mirrors MapSelect_LoadGame)
++    for (s32 i = EQUIP_SLOT_B; i <= EQUIP_SLOT_A; i++) gSaveContext.buttonStatus[i] = BTN_ENABLED;
++    for (s32 i = 0; i < 4; i++) gSaveContext.shipSaveContext.dpad.status[i] = BTN_ENABLED;
++    gSaveContext.hudVisibilityForceButtonAlphasByStatus = false;
++    gSaveContext.nextHudVisibility = HUD_VISIBILITY_IDLE;
++    gSaveContext.hudVisibility = HUD_VISIBILITY_IDLE;
++    gSaveContext.hudVisibilityTimer = 0;
++    gSaveContext.save.cutsceneIndex = 0;
++    gSaveContext.nextCutsceneIndex = 0xFFEF;
++    gSaveContext.save.entrance = sSnap->respawn.entrance;
++    gSaveContext.seqId = NA_BGM_DISABLED;
++    gSaveContext.ambienceId = AMBIENCE_ID_DISABLED;
++    gSaveContext.showTitleCard = true;
++    gSaveContext.respawn[RESPAWN_MODE_GORON].entrance = 0xFF;
++    gSaveContext.respawn[RESPAWN_MODE_ZORA].entrance = 0xFF;
++    gSaveContext.respawn[RESPAWN_MODE_DEKU].entrance = 0xFF;
++    gSaveContext.respawn[RESPAWN_MODE_HUMAN].entrance = 0xFF;
++    gWeatherMode = WEATHER_MODE_CLEAR;
++    ApplySnapshotRespawn();
++
++    STOP_GAMESTATE(gGameState);
++    SET_NEXT_GAMESTATE(gGameState, Play_Init, sizeof(PlayState));
 +}
 +
 +// Called at the start of Play_Init (z_play.c): apply a pending quick load before the area is built.
@@ -2919,6 +3378,23 @@ index 0000000..74d486e
 +    memcpy(&gSaveContext.save, &sSnap->save, sizeof(Save));
 +    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
 +    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
++    memcpy(&gSaveContext.shipSaveContext, &sSnap->shipSaveContext, sizeof(ShipSaveContext));
++    gSaveContext.save.entrance = sSnap->respawn.entrance;
++    ApplySnapshotRespawn();
++}
++
++// Runs every frame in every game state (logo, title, file select, gameplay)
++static void OnGameStateUpdate() {
++    bool inGameplay = (gPlayState != nullptr) && (gSaveContext.gameMode == GAMEMODE_NORMAL);
++    if (!inGameplay && TakeRequest(ACT_QUICKLOAD)) {
++        if (sHaveSnap) {
++            BootQuickLoad();
++        } else {
++            PostMessage("No quick save yet");
++        }
++    }
++    if (gPlayState == nullptr) sStateBits = 0; // logo / file select: no gameplay panels
++    sFrameCounter++; // keeps the overlay's "game is running" check alive outside gameplay too
 +}
 +
 +// ---------------------------------------------------------------- fast travel map (owl statues)
@@ -3041,9 +3517,35 @@ index 0000000..74d486e
 +// ---------------------------------------------------------------- per-frame (end of Play_Update, z_play.c)
 +static s32 sLastStep = -1;
 +
++static void ApplyHudStyle() {
++    int want = sModernHud.exchange(-1);
++    if (want < 0) return;
++    // Hide the vanilla clock, hearts, magic and rupees (the touch overlay draws its own bar),
++    // plus the C/Start button icons that the touch buttons now show.
++    static const char* elems[] = { "Clock", "Hearts", "Magic", "Rupees", "CLeft", "CDown", "CRight", "CUp", "Start" };
++    for (const char* e : elems) {
++        std::string cvar = std::string("gHudEditor.") + e + ".Mode";
++        CVarSetInteger(cvar.c_str(), want ? 1 /* hidden */ : 0 /* vanilla */);
++    }
++    CVarSave();
++}
++
++static void UpdateHudData(PlayState* play) {
++    sHud[0] = gSaveContext.save.saveInfo.playerData.health;
++    sHud[1] = gSaveContext.save.saveInfo.playerData.healthCapacity;
++    sHud[2] = gSaveContext.save.saveInfo.playerData.magic;
++    sHud[3] = gSaveContext.save.saveInfo.playerData.isMagicAcquired ? gSaveContext.magicCapacity : 0;
++    sHud[4] = gSaveContext.save.saveInfo.playerData.rupees;
++    sHud[5] = CUR_CAPACITY(UPG_WALLET);
++    sHud[6] = gSaveContext.save.day;
++    sHud[7] = gSaveContext.save.time;
++    sHud[8] = (gSaveContext.save.saveInfo.playerData.doubleDefense ? 1 : 0) | (gSaveContext.save.isNight ? 2 : 0);
++}
++
 +extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
 +    int bits = 0;
-+    sFrameCounter++;
++    ApplyHudStyle();
++    UpdateHudData(play);
 +    ServiceIcons();
 +    UpdateItemsAndPause(play);
 +
@@ -3111,6 +3613,10 @@ index 0000000..74d486e
 +        bits |= ST_SHOW_QUEST;
 +    }
 +    if (IS_PAUSED(&play->pauseCtx)) bits |= ST_PAUSED;
++    if ((gSaveContext.gameMode == GAMEMODE_NORMAL) && !IS_PAUSED(&play->pauseCtx) && !InCutscene(play) &&
++        (play->gameOverCtx.state == GAMEOVER_INACTIVE)) {
++        bits |= ST_GAMEPLAY;
++    }
 +    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
 +    if (sSprintOn) bits |= ST_SPRINT;
 +    if (sTrailOn) bits |= ST_TRAIL;
@@ -3158,6 +3664,8 @@ index 0000000..74d486e
 +    if (!hookRegistered) {
 +        hookRegistered = true;
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPassPlayerInputs>(OnPlayerInputs);
++        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateUpdate>(OnGameStateUpdate);
++        ReadSnapshotFile();
 +    }
 +    ApplyPresetOnce();
 +}
@@ -3260,6 +3768,22 @@ index 0000000..74d486e
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmPauseSelect(JNIEnv*, jobject, jint slot) {
 +    sPauseSelect = slot;
 +}
++
++// option 1 = touch-only pause screen, option 2 = modern HUD bar (1 on / 0 off)
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetOption(JNIEnv*, jobject, jint option,
++                                                                                        jint value) {
++    if (option == 1) sTouchOnlyPause = value;
++    if (option == 2) sModernHud = value;
++}
++
++// { health (1/16 hearts), max health, magic, max magic (0 = none), rupees, wallet size, day, time, flags }
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetHud(JNIEnv* env, jobject) {
++    jint vals[9];
++    for (int i = 0; i < 9; i++) vals[i] = sHud[i].load();
++    jintArray arr = env->NewIntArray(9);
++    env->SetIntArrayRegion(arr, 0, 9, vals);
++    return arr;
++}
 +#endif
 diff --git a/mm/src/code/padmgr.c b/mm/src/code/padmgr.c
 index f0e57da..9b9d94f 100644
@@ -3348,3 +3872,35 @@ index 2e947e0..7bcd6c4 100644
              } else {
                  this->av1.actionVar1++;
                  Player_Anim_PlayLoopSlowMorph(play, this, &gPlayerAnim_link_swimer_swim_wait);
+diff --git a/mm/src/overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope_NES.c b/mm/src/overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope_NES.c
+index dcb6258..3992942 100644
+--- a/mm/src/overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope_NES.c
++++ b/mm/src/overlays/kaleido_scope/ovl_kaleido_scope/z_kaleido_scope_NES.c
+@@ -3139,6 +3139,8 @@ void KaleidoScope_DrawGameOver(PlayState* play) {
+     CLOSE_DISPS(gfxCtx);
+ }
+ 
++s32 MMMod_HidePauseGraphics(PlayState* play);
++
+ void KaleidoScope_Draw(PlayState* play) {
+     s32 pad;
+     PauseContext* pauseCtx = &play->pauseCtx;
+@@ -3161,6 +3163,8 @@ void KaleidoScope_Draw(PlayState* play) {
+         if (!IS_PAUSE_STATE_OWL_WARP(pauseCtx)) {
+             // Draw Default or Game Over Menus
+             KaleidoScope_SetVertices(play, play->state.gfxCtx);
++            // Majora's Mask touch mod: the touch panel replaces the Items/Masks pages, so don't draw them
++            if (!MMMod_HidePauseGraphics(play)) {
+             KaleidoScope_DrawPages(play, play->state.gfxCtx);
+ 
+             Gfx_SetupDL42_Opa(play->state.gfxCtx);
+@@ -3178,6 +3182,9 @@ void KaleidoScope_Draw(PlayState* play) {
+             if (pauseCtx->state == PAUSE_STATE_MAIN) {
+                 KaleidoScope_DrawCursor(play);
+             }
++            } else {
++                KaleidoScope_UpdateCursorSize(play);
++            }
+ 
+             if ((pauseCtx->state >= PAUSE_STATE_GAMEOVER_3) && (pauseCtx->state <= PAUSE_STATE_GAMEOVER_10) &&
+                 (play->gameOverCtx.state != GAMEOVER_INACTIVE)) {
