@@ -1,5 +1,5 @@
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..c3ea69c 100644
+index fe546c8..f8431a1 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
@@ -12,7 +12,7 @@ index fe546c8..c3ea69c 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +958,16 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +958,20 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -25,11 +25,15 @@ index fe546c8..c3ea69c 100644
 +    public native String nativeMmPollMessage();
 +    public native String nativeMmGetSongs();
 +    public native void nativeMmPlaySong(int index);
++    public native int[] nativeMmGetCItems();
++    public native int[] nativeMmGetItemIcon(int item);
++    public native int[] nativeMmGetPauseGrid();
++    public native void nativeMmPauseSelect(int slot);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +975,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +979,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -41,14 +45,15 @@ index fe546c8..c3ea69c 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..649b2ac
+index 0000000..f57bf33
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1086 @@
+@@ -0,0 +1,1319 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
 +import android.content.SharedPreferences;
++import android.graphics.Bitmap;
 +import android.graphics.Color;
 +import android.graphics.Typeface;
 +import android.graphics.drawable.GradientDrawable;
@@ -61,10 +66,12 @@ index 0000000..649b2ac
 +import android.view.View;
 +import android.view.ViewGroup;
 +import android.widget.FrameLayout;
++import android.widget.ImageView;
 +import android.widget.LinearLayout;
 +import android.widget.TextView;
 +
 +import java.util.ArrayList;
++import java.util.HashMap;
 +import java.util.List;
 +
 +/**
@@ -82,7 +89,8 @@ index 0000000..649b2ac
 +    static final int ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6,
 +            ACT_TRAIL = 7;
 +    // Native state bits
-+    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32;
++    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
++            ST_PAUSED = 64, ST_PAUSE_GRID = 128;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
@@ -106,6 +114,16 @@ index 0000000..649b2ac
 +    private final List<Ctl> ctls = new ArrayList<>();
 +    private Ctl questCtl, skipCtl, sprintCtl;
 +    private TextView questWhere, questTitle, questText;
++
++    // Item icons (from the game's own textures) for the C buttons and the touch pause grid
++    private final HashMap<Integer, Bitmap> iconCache = new HashMap<>();
++    private LinearLayout pausePanel, pauseGridBox;
++    private TextView pauseTitle, pauseHint;
++    private final TextView[] gridLabels = new TextView[24];
++    private final ImageView[] gridIcons = new ImageView[24];
++    private final FrameLayout[] gridTiles = new FrameLayout[24];
++    private final int[] gridShown = new int[24];
++    private int gridCursorShown = -2;
 +
 +    private boolean editing = false;
 +    private boolean menuMode = false; // 2 Ship settings menu open: overlay steps aside so the menu gets touches
@@ -147,6 +165,8 @@ index 0000000..649b2ac
 +        boolean hidden, defHidden;
 +        View view;
 +        TextView text;
++        ImageView icon;
++        int shownItem = -2;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
 +        Ctl(String id, String label, String sub, int kind, int value, int style, float x, float y, float size) {
@@ -223,6 +243,7 @@ index 0000000..649b2ac
 +            else buildCtl(c);
 +        }
 +        buildSongsPanel();
++        buildPausePanel();
 +        buildSettingsPanel();
 +        buildTray();
 +        buildEditBar();
@@ -274,7 +295,11 @@ index 0000000..649b2ac
 +            stateBits = (now - lastFrameChange > 600) ? 0 : (int) (s & 0xFFFF);
 +
 +            setSprintUi((stateBits & ST_SPRINT) != 0);
-+            if (trailItem != null) trailItem.setText((stateBits & ST_TRAIL) != 0 ? "Trail: on" : "Trail: off");
++            boolean trailOnNow = (stateBits & ST_TRAIL) != 0;
++            if (trailTile != null && trailTile.getTag() != Boolean.valueOf(trailOnNow)) {
++                trailTile.setTag(Boolean.valueOf(trailOnNow));
++                setTileOn(trailTile, trailOnNow);
++            }
 +
 +            boolean showSkip = editing || (((stateBits & ST_CAN_SKIP) != 0) && !controlsHidden);
 +            skipCtl.view.setVisibility((showSkip && (!skipCtl.hidden || editing)) ? View.VISIBLE : View.GONE);
@@ -300,6 +325,9 @@ index 0000000..649b2ac
 +                }
 +            }
 +            songsPanel.setVisibility(showSongs ? View.VISIBLE : View.GONE);
++
++            updateCIcons();
++            updatePausePanel();
 +
 +            String msg = act.nativeMmPollMessage();
 +            if (msg != null && !msg.isEmpty()) showToast(msg);
@@ -341,6 +369,7 @@ index 0000000..649b2ac
 +            for (Ctl c : ctls) c.view.setVisibility(View.GONE);
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
++            pausePanel.setVisibility(View.GONE);
 +            settingsPanel.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
 +            closeMenuBtn.setVisibility(View.VISIBLE);
@@ -415,6 +444,16 @@ index 0000000..649b2ac
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        if (c.style == STYLE_C && c.value != N64_CUP) {
++            ImageView iv = new ImageView(act);
++            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
++            iv.setVisibility(View.GONE);
++            FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
++            int pad = dp(c.size * 0.14f);
++            ilp.setMargins(pad, pad, pad, pad);
++            v.addView(iv, ilp);
++            c.icon = iv;
++        }
 +        c.view = v;
 +        c.text = t;
 +        v.setOnTouchListener((view, e) -> onCtlTouch(c, e));
@@ -490,6 +529,169 @@ index 0000000..649b2ac
 +                act.nativeMmPlaySong(idx);
 +            });
 +            songsList.addView(row);
++        }
++    }
++
++    // ---------------------------------------------------------------- item icons
++    private Bitmap iconFor(int item) {
++        if (item < 0 || item >= 255) return null;
++        if (iconCache.containsKey(item)) return iconCache.get(item);
++        int[] data = act.nativeMmGetItemIcon(item);
++        if (data == null) return null; // still loading, ask again next poll
++        Bitmap bmp = null;
++        if (data.length > 2) {
++            int w = data[0], h = data[1];
++            Bitmap raw = Bitmap.createBitmap(data, 2, w, w, h, Bitmap.Config.ARGB_8888);
++            bmp = Bitmap.createScaledBitmap(raw, w * 4, h * 4, false); // keep the crisp N64 pixel look
++        }
++        iconCache.put(item, bmp);
++        return bmp;
++    }
++
++    private void updateCIcons() {
++        int[] items = act.nativeMmGetCItems();
++        if (items == null) return;
++        int[] masks = { N64_CLEFT, N64_CDOWN, N64_CRIGHT };
++        for (Ctl c : ctls) {
++            if (c.icon == null) continue;
++            int slot = c.value == N64_CLEFT ? 0 : (c.value == N64_CDOWN ? 1 : 2);
++            int item = items[slot];
++            if (item == c.shownItem && !(item != 255 && !iconCache.containsKey(item))) continue;
++            Bitmap bmp = iconFor(item);
++            if (bmp == null && item != 255 && !iconCache.containsKey(item)) continue; // not loaded yet
++            c.shownItem = item;
++            if (bmp != null) {
++                c.icon.setImageBitmap(bmp);
++                c.icon.setVisibility(View.VISIBLE);
++                c.text.setVisibility(View.GONE);
++            } else {
++                c.icon.setVisibility(View.GONE);
++                c.text.setVisibility(View.VISIBLE);
++            }
++        }
++    }
++
++    // ---------------------------------------------------------------- touch pause menu
++    private void buildPausePanel() {
++        pausePanel = new LinearLayout(act);
++        pausePanel.setOrientation(LinearLayout.VERTICAL);
++        pausePanel.setPadding(dp(12), dp(8), dp(12), dp(10));
++        pausePanel.setBackground(panelDrawable());
++        pausePanel.setVisibility(View.GONE);
++
++        LinearLayout top = new LinearLayout(act);
++        top.setGravity(Gravity.CENTER_VERTICAL);
++        top.addView(pauseButton("\u25C0 Z", v -> tapN64(N64_Z)));
++        pauseTitle = new TextView(act);
++        pauseTitle.setTextColor(GOLD);
++        pauseTitle.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        pauseTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
++        pauseTitle.setGravity(Gravity.CENTER);
++        top.addView(pauseTitle, new LinearLayout.LayoutParams(dp(150), ViewGroup.LayoutParams.WRAP_CONTENT));
++        top.addView(pauseButton("R \u25B6", v -> tapN64(N64_R)));
++        top.addView(pauseButton("\u2715 Close", v -> tapN64(N64_START)));
++        pausePanel.addView(top);
++
++        pauseGridBox = new LinearLayout(act);
++        pauseGridBox.setOrientation(LinearLayout.VERTICAL);
++        for (int r = 0; r < 4; r++) {
++            LinearLayout row = new LinearLayout(act);
++            for (int col = 0; col < 6; col++) {
++                final int slot = r * 6 + col;
++                FrameLayout tile = new FrameLayout(act);
++                GradientDrawable bg = new GradientDrawable();
++                bg.setColor(Color.argb(120, 40, 36, 60));
++                bg.setCornerRadius(dp(8));
++                bg.setStroke(dp(1), Color.argb(70, 232, 196, 92));
++                tile.setBackground(bg);
++                ImageView iv = new ImageView(act);
++                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
++                FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
++                ilp.setMargins(dp(5), dp(5), dp(5), dp(5));
++                tile.addView(iv, ilp);
++                TextView lbl = new TextView(act);
++                lbl.setTextColor(Color.argb(160, 255, 255, 255));
++                lbl.setGravity(Gravity.CENTER);
++                lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
++                tile.addView(lbl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++                tile.setOnClickListener(v -> {
++                    touched();
++                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                    act.nativeMmPauseSelect(slot);
++                });
++                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(54), dp(54));
++                tlp.setMargins(dp(3), dp(3), dp(3), dp(3));
++                row.addView(tile, tlp);
++                gridTiles[slot] = tile;
++                gridIcons[slot] = iv;
++                gridLabels[slot] = lbl;
++                gridShown[slot] = -2;
++            }
++            pauseGridBox.addView(row);
++        }
++        pausePanel.addView(pauseGridBox);
++
++        pauseHint = new TextView(act);
++        pauseHint.setText("Tap an item, then tap a C button to put it there \u00B7 A = description");
++        pauseHint.setTextColor(Color.argb(190, 255, 255, 255));
++        pauseHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        pauseHint.setPadding(dp(4), dp(6), 0, 0);
++        pausePanel.addView(pauseHint);
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.CENTER;
++        root.addView(pausePanel, lp);
++    }
++
++    private TextView pauseButton(String label, View.OnClickListener onClick) {
++        TextView b = editButton(label, v -> {
++            touched();
++            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++            onClick.onClick(v);
++        });
++        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        b.setPadding(dp(12), dp(8), dp(12), dp(8));
++        return b;
++    }
++
++    private void updatePausePanel() {
++        boolean paused = (stateBits & ST_PAUSED) != 0;
++        if (!paused || editing) {
++            pausePanel.setVisibility(View.GONE);
++            return;
++        }
++        boolean grid = (stateBits & ST_PAUSE_GRID) != 0;
++        int[] g = grid ? act.nativeMmGetPauseGrid() : null;
++        if (g == null || g[0] < 0) grid = false;
++        pausePanel.setVisibility(View.VISIBLE);
++        pauseGridBox.setVisibility(grid ? View.VISIBLE : View.GONE);
++        pauseHint.setVisibility(grid ? View.VISIBLE : View.GONE);
++        if (!grid) {
++            pauseTitle.setText("Pause");
++            return;
++        }
++        pauseTitle.setText(g[0] == 3 ? "Masks" : "Items");
++        for (int i = 0; i < 24; i++) {
++            int item = g[2 + i];
++            if (item != gridShown[i] || (item != 255 && !iconCache.containsKey(item))) {
++                Bitmap bmp = iconFor(item);
++                if (item == 255) {
++                    gridIcons[i].setImageBitmap(null);
++                    gridShown[i] = item;
++                } else if (bmp != null || iconCache.containsKey(item)) {
++                    gridIcons[i].setImageBitmap(bmp);
++                    gridShown[i] = item;
++                }
++            }
++        }
++        if (g[1] != gridCursorShown) {
++            for (int i = 0; i < 24; i++) {
++                GradientDrawable bg = (GradientDrawable) gridTiles[i].getBackground();
++                boolean sel = i == g[1];
++                bg.setStroke(dp(sel ? 3 : 1), sel ? GOLD : Color.argb(70, 232, 196, 92));
++                bg.setColor(sel ? Color.argb(160, 120, 96, 30) : Color.argb(120, 40, 36, 60));
++            }
++            gridCursorShown = g[1];
 +        }
 +    }
 +
@@ -590,44 +792,79 @@ index 0000000..649b2ac
 +        stickTypeLabel.setText(fixedStick ? "Fixed" : "Dynamic");
 +    }
 +
++    private TextView trailTile, questTile, hideTile;
++
 +    private void buildTray() {
 +        tray = new LinearLayout(act);
 +        tray.setOrientation(LinearLayout.VERTICAL);
-+        tray.setPadding(dp(8), dp(6), dp(8), dp(6));
++        tray.setPadding(dp(10), dp(8), dp(10), dp(10));
 +        tray.setBackground(panelDrawable());
 +        tray.setVisibility(View.GONE);
 +
 +        LinearLayout row1 = new LinearLayout(act);
 +        LinearLayout row2 = new LinearLayout(act);
-+        row1.addView(trayItem("Map", v -> act.nativeMmAction(ACT_MAP), true));
-+        row1.addView(trayItem("Quick save", v -> act.nativeMmAction(ACT_QUICKSAVE), true));
-+        row1.addView(trayItem("Quick load", v -> act.nativeMmAction(ACT_QUICKLOAD), true));
-+        trailItem = trayItem("Trail: on", v -> act.nativeMmAction(ACT_TRAIL), false);
-+        row1.addView(trailItem);
-+        questItem = trayItem(questPanelOn ? "Quest: on" : "Quest: off", v -> {
++        row1.addView(trayTile("\uD83D\uDDFA", "Map", v -> act.nativeMmAction(ACT_MAP), true));
++        row1.addView(trayTile("\uD83D\uDCBE", "Save", v -> act.nativeMmAction(ACT_QUICKSAVE), true));
++        row1.addView(trayTile("\u21BA", "Load", v -> act.nativeMmAction(ACT_QUICKLOAD), true));
++        trailTile = trayTile("\u2728", "Trail", v -> act.nativeMmAction(ACT_TRAIL), false);
++        row1.addView(trailTile);
++        questTile = trayTile("\uD83D\uDCDC", "Quest", v -> {
 +            questPanelOn = !questPanelOn;
 +            prefs.edit().putBoolean("questPanel", questPanelOn).apply();
-+            ((TextView) v).setText(questPanelOn ? "Quest: on" : "Quest: off");
++            setTileOn(questTile, questPanelOn);
 +        }, false);
-+        row1.addView(questItem);
-+        row1.addView(trayItem("Pause", v -> tapN64(N64_START), true));
++        row1.addView(questTile);
 +
-+        row2.addView(trayItem("Tatl", v -> tapN64(N64_CUP), true));
-+        row2.addView(trayItem("Minimap", v -> tapN64(N64_L), true));
-+        row2.addView(trayItem("2 Ship menu", v -> act.nativeGamepadBackPressed(), true));
-+        row2.addView(trayItem("Touch settings", v -> showSettings(true), true));
-+        row2.addView(trayItem("Edit controls", v -> setEditing(true), true));
-+        row2.addView(trayItem("Hide controls", v -> {
++        row2.addView(trayTile("\uD83E\uDDED", "Minimap", v -> tapN64(N64_L), true));
++        row2.addView(trayTile("\u2699", "Touch", v -> showSettings(true), true));
++        row2.addView(trayTile("\u270E", "Edit", v -> setEditing(true), true));
++        hideTile = trayTile("\uD83D\uDC41", "Hide", v -> {
 +            controlsHidden = !controlsHidden;
-+            ((TextView) v).setText(controlsHidden ? "Show controls" : "Hide controls");
-+        }, false));
++            setTileOn(hideTile, controlsHidden);
++        }, false);
++        row2.addView(hideTile);
++        row2.addView(trayTile("\u2630", "2 Ship", v -> act.nativeGamepadBackPressed(), true));
 +        tray.addView(row1);
 +        tray.addView(row2);
++        setTileOn(questTile, questPanelOn);
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-+        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-+        lp.topMargin = dp(52);
++        lp.gravity = Gravity.TOP | Gravity.END;
++        lp.topMargin = dp(64);
++        lp.rightMargin = dp(16);
 +        root.addView(tray, lp);
++    }
++
++    private TextView trayTile(String icon, String label, View.OnClickListener onClick, boolean closesTray) {
++        TextView b = new TextView(act);
++        b.setText(icon + "\n" + label);
++        b.setTextColor(Color.WHITE);
++        b.setGravity(Gravity.CENTER);
++        b.setTypeface(Typeface.DEFAULT_BOLD);
++        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        b.setLineSpacing(dp(2), 1f);
++        GradientDrawable bg = new GradientDrawable();
++        bg.setColor(Color.argb(110, 40, 36, 60));
++        bg.setCornerRadius(dp(10));
++        bg.setStroke(dp(1), Color.argb(60, 232, 196, 92));
++        b.setBackground(bg);
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(62));
++        lp.setMargins(dp(4), dp(4), dp(4), dp(4));
++        b.setLayoutParams(lp);
++        b.setOnClickListener(v -> {
++            touched();
++            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++            onClick.onClick(v);
++            if (closesTray) tray.setVisibility(View.GONE);
++        });
++        return b;
++    }
++
++    private void setTileOn(TextView tile, boolean on) {
++        if (tile == null) return;
++        GradientDrawable bg = (GradientDrawable) tile.getBackground();
++        bg.setColor(on ? Color.argb(170, 150, 118, 40) : Color.argb(110, 40, 36, 60));
++        bg.setStroke(dp(on ? 2 : 1), on ? GOLD : Color.argb(60, 232, 196, 92));
 +    }
 +
 +    private TextView trayItem(String label, View.OnClickListener onClick, boolean closesTray) {
@@ -2309,10 +2546,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..47f7868
+index 0000000..74d486e
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,582 @@
+@@ -0,0 +1,711 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -2321,9 +2558,14 @@ index 0000000..47f7868
 +#include "2s2h/GameInteractor/GameInteractor.h"
 +#include "2s2h/ShipInit.hpp"
 +#include "2s2h/Enhancements/Saving/SavingEnhancements.h"
++#include <libultraship/bridge/resourcebridge.h>
++#include "fast/resource/type/Texture.h"
 +#include <atomic>
 +#include <mutex>
 +#include <string>
++#include <map>
++#include <set>
++#include <vector>
 +
 +extern "C" {
 +#include "variables.h"
@@ -2346,6 +2588,7 @@ index 0000000..47f7868
 +#include <jni.h>
 +#endif
 +
++#define PAUSE_ITEM_NONE 999 // from z_kaleido_scope.h
 +#define CVAR_SPEED_MODE "gCheats.SpeedModifier.Mode"
 +#define CVAR_SPEED_VALUE "gCheats.SpeedModifier.Value"
 +#define CVAR_JUMP_HEIGHT "gMMTouch.JumpHeight"
@@ -2359,8 +2602,87 @@ index 0000000..47f7868
 +// State bits reported to the overlay
 +enum {
 +    ST_CAN_SKIP = 1 << 0, ST_OCARINA = 1 << 1, ST_SHOW_QUEST = 1 << 2, ST_SPRINT = 1 << 3, ST_TRAIL = 1 << 4,
-+    ST_SKIPPING = 1 << 5,
++    ST_SKIPPING = 1 << 5, ST_PAUSED = 1 << 6, ST_PAUSE_GRID = 1 << 7, // item or mask page ready for touch
 +};
++
++// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
++static std::mutex sIconMutex;
++static std::map<int, std::vector<int>> sIconCache; // item id -> { w, h, argb... }
++static std::set<int> sIconRequests;
++static std::atomic<int> sCItems[3] = { 0xFF, 0xFF, 0xFF };
++static std::atomic<int> sPausePage{ -1 };
++static std::atomic<int> sPauseCursor{ -1 };
++static std::atomic<int> sPauseSelect{ -1 };
++static int sPauseItems[24];
++static std::mutex sPauseMutex;
++
++static void LoadIcon(int item) {
++    std::vector<int> out;
++    if ((item >= 0) && (item < (int)(sizeof(gItemIcons) / sizeof(gItemIcons[0]))) && (gItemIcons[item] != nullptr)) {
++        auto tex = ResourceLoad<Fast::Texture>((const char*)gItemIcons[item]);
++        if (tex != nullptr && tex->ImageData != nullptr && tex->Type == Fast::TextureType::RGBA32bpp &&
++            !(tex->Flags & TEX_FLAG_LOAD_AS_IMG) && (tex->ImageDataSize >= (uint32_t)tex->Width * tex->Height * 4)) {
++            out.reserve(2 + tex->Width * tex->Height);
++            out.push_back(tex->Width);
++            out.push_back(tex->Height);
++            for (int i = 0; i < tex->Width * tex->Height; i++) {
++                uint8_t* px = &tex->ImageData[i * 4];
++                out.push_back((int)(((uint32_t)px[3] << 24) | ((uint32_t)px[0] << 16) | ((uint32_t)px[1] << 8) | px[2]));
++            }
++        }
++    }
++    std::lock_guard<std::mutex> lock(sIconMutex);
++    sIconCache[item] = out; // empty = no icon available
++}
++
++static void ServiceIcons() {
++    std::set<int> todo;
++    {
++        std::lock_guard<std::mutex> lock(sIconMutex);
++        todo.swap(sIconRequests);
++    }
++    for (int item : todo) LoadIcon(item);
++}
++
++static void UpdateItemsAndPause(PlayState* play) {
++    sCItems[0] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT);
++    sCItems[1] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_DOWN);
++    sCItems[2] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_RIGHT);
++
++    PauseContext* pauseCtx = &play->pauseCtx;
++    bool gridReady = IS_PAUSED(pauseCtx) && (pauseCtx->state == PAUSE_STATE_MAIN) &&
++                     (pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) && !pauseCtx->itemDescriptionOn &&
++                     ((pauseCtx->pageIndex == PAUSE_ITEM) || (pauseCtx->pageIndex == PAUSE_MASK));
++    if (!gridReady) {
++        sPausePage = -1;
++        sPauseSelect = -1;
++        return;
++    }
++    int page = pauseCtx->pageIndex;
++    int base = (page == PAUSE_MASK) ? ITEM_NUM_SLOTS : 0;
++
++    // Touch selection: move the game's own cursor to the tapped slot, so its equip logic does the rest.
++    int sel = sPauseSelect.exchange(-1);
++    if ((sel >= 0) && (sel < ITEM_NUM_SLOTS)) {
++        u8 item = gSaveContext.save.saveInfo.inventory.items[base + sel];
++        pauseCtx->cursorSpecialPos = 0;
++        pauseCtx->cursorPoint[page] = sel;
++        pauseCtx->cursorXIndex[page] = sel % ITEM_GRID_COLS;
++        pauseCtx->cursorYIndex[page] = sel / ITEM_GRID_COLS;
++        pauseCtx->cursorItem[page] = (item == ITEM_NONE) ? PAUSE_ITEM_NONE : item;
++        pauseCtx->cursorSlot[page] = sel + base;
++        Audio_PlaySfx(NA_SE_SY_CURSOR);
++    }
++
++    {
++        std::lock_guard<std::mutex> lock(sPauseMutex);
++        for (int i = 0; i < ITEM_NUM_SLOTS; i++) {
++            sPauseItems[i] = gSaveContext.save.saveInfo.inventory.items[base + i];
++        }
++    }
++    sPauseCursor = (pauseCtx->cursorSpecialPos == 0) ? pauseCtx->cursorPoint[page] : -1;
++    sPausePage = page;
++}
 +
 +// ---------------------------------------------------------------- shared state
 +extern "C" {
@@ -2722,6 +3044,8 @@ index 0000000..47f7868
 +extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
 +    int bits = 0;
 +    sFrameCounter++;
++    ServiceIcons();
++    UpdateItemsAndPause(play);
 +
 +    if (sFastTravelOpen && !IS_PAUSED(&play->pauseCtx)) FinishFastTravel(play);
 +
@@ -2786,6 +3110,8 @@ index 0000000..47f7868
 +        (play->msgCtx.msgMode == MSGMODE_NONE) && !InCutscene(play) && !Play_InCsMode(play)) {
 +        bits |= ST_SHOW_QUEST;
 +    }
++    if (IS_PAUSED(&play->pauseCtx)) bits |= ST_PAUSED;
++    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
 +    if (sSprintOn) bits |= ST_SPRINT;
 +    if (sTrailOn) bits |= ST_TRAIL;
 +    sStateBits = bits;
@@ -2893,6 +3219,46 @@ index 0000000..47f7868
 +
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmPlaySong(JNIEnv*, jobject, jint index) {
 +    sSongRequest = index;
++}
++
++// { C-left, C-down, C-right } item ids (255 = empty)
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetCItems(JNIEnv* env, jobject) {
++    jint vals[3] = { sCItems[0].load(), sCItems[1].load(), sCItems[2].load() };
++    jintArray arr = env->NewIntArray(3);
++    env->SetIntArrayRegion(arr, 0, 3, vals);
++    return arr;
++}
++
++// { width, height, ARGB pixels... }, empty array if the item has no icon, or null if not loaded yet (try again)
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetItemIcon(JNIEnv* env, jobject,
++                                                                                               jint item) {
++    std::lock_guard<std::mutex> lock(sIconMutex);
++    auto it = sIconCache.find(item);
++    if (it == sIconCache.end()) {
++        sIconRequests.insert(item);
++        return nullptr;
++    }
++    jintArray arr = env->NewIntArray((jsize)it->second.size());
++    if (!it->second.empty()) env->SetIntArrayRegion(arr, 0, (jsize)it->second.size(), it->second.data());
++    return arr;
++}
++
++// { page (0 = items, 3 = masks, -1 = not ready), cursor slot, 24 item ids }
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetPauseGrid(JNIEnv* env, jobject) {
++    jint vals[2 + ITEM_NUM_SLOTS];
++    vals[0] = sPausePage.load();
++    vals[1] = sPauseCursor.load();
++    {
++        std::lock_guard<std::mutex> lock(sPauseMutex);
++        for (int i = 0; i < ITEM_NUM_SLOTS; i++) vals[2 + i] = sPauseItems[i];
++    }
++    jintArray arr = env->NewIntArray(2 + ITEM_NUM_SLOTS);
++    env->SetIntArrayRegion(arr, 0, 2 + ITEM_NUM_SLOTS, vals);
++    return arr;
++}
++
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmPauseSelect(JNIEnv*, jobject, jint slot) {
++    sPauseSelect = slot;
 +}
 +#endif
 diff --git a/mm/src/code/padmgr.c b/mm/src/code/padmgr.c
