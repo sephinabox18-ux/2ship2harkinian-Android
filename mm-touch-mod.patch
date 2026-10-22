@@ -41,10 +41,10 @@ index fe546c8..c3ea69c 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..fbbfedc
+index 0000000..108c293
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,776 @@
+@@ -0,0 +1,950 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -108,6 +108,8 @@ index 0000000..fbbfedc
 +    private TextView questWhere, questTitle, questText;
 +
 +    private boolean editing = false;
++    private boolean menuMode = false; // 2 Ship settings menu open: overlay steps aside so the menu gets touches
++    private TextView closeMenuBtn;
 +    private boolean controlsHidden = false;
 +    private boolean questPanelOn;
 +    private float opacity;
@@ -120,6 +122,14 @@ index 0000000..fbbfedc
 +    private String lastSongs = "";
 +
 +    private int stickPointer = -1, camPointer = -1;
++    // Swipe camera: camera turns with finger speed (stops when the finger stops), smoothed for high touch rates
++    private boolean swipeCamera;
++    private float camLastX, camLastY, camVx, camVy;
++    private long camLastT;
++    // Adaptive camera: learns how fast you usually swipe and scales the camera to match
++    private float typicalSwipe;   // dp per second of a normal swipe, learned over time
++    private float gesturePeak;    // fastest speed seen in the current swipe
++    private long lastCamMoveWall;
 +    private float stickX0, stickY0, camX0, camY0;
 +    private long lastStickDown = 0;
 +
@@ -144,6 +154,8 @@ index 0000000..fbbfedc
 +        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        opacity = prefs.getFloat("opacity", 0.85f);
 +        questPanelOn = prefs.getBoolean("questPanel", true);
++        swipeCamera = prefs.getBoolean("swipeCamera", true);
++        typicalSwipe = prefs.getFloat("typicalSwipe", 900f);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -181,7 +193,7 @@ index 0000000..fbbfedc
 +
 +        stickBase = disc(Color.argb(40, 255, 255, 255), GOLD_SOFT, 2);
 +        stickKnob = disc(Color.argb(120, 255, 255, 255), GOLD, 2);
-+        root.addView(stickBase, new FrameLayout.LayoutParams(dp(130), dp(130)));
++        root.addView(stickBase, new FrameLayout.LayoutParams(dp(STICK_RADIUS_DP * 2 + 20), dp(STICK_RADIUS_DP * 2 + 20)));
 +        root.addView(stickKnob, new FrameLayout.LayoutParams(dp(56), dp(56)));
 +        stickBase.setVisibility(View.GONE);
 +        stickKnob.setVisibility(View.GONE);
@@ -195,6 +207,7 @@ index 0000000..fbbfedc
 +        buildTray();
 +        buildEditBar();
 +        buildToast();
++        buildCloseMenuButton();
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> layoutAll());
 +        act.nativeMmSetOverlayActive(true);
@@ -224,6 +237,12 @@ index 0000000..fbbfedc
 +    private final Runnable poll = new Runnable() {
 +        @Override
 +        public void run() {
++            boolean menu = !act.TouchAreaEnabled;
++            if (menu != menuMode) setMenuMode(menu);
++            if (menuMode) {
++                handler.postDelayed(this, 100);
++                return;
++            }
 +            long s = act.nativeMmGetState();
 +            int frame = (int) (s >>> 32);
 +            long now = System.currentTimeMillis();
@@ -268,6 +287,49 @@ index 0000000..fbbfedc
 +            handler.postDelayed(this, 100);
 +        }
 +    };
++
++    private void buildCloseMenuButton() {
++        closeMenuBtn = hudText(15);
++        closeMenuBtn.setTypeface(Typeface.DEFAULT_BOLD);
++        closeMenuBtn.setText("\u2715  Close menu");
++        closeMenuBtn.setPadding(dp(16), dp(10), dp(16), dp(10));
++        GradientDrawable bg = panelDrawable();
++        bg.setCornerRadius(dp(22));
++        closeMenuBtn.setBackground(bg);
++        closeMenuBtn.setVisibility(View.GONE);
++        closeMenuBtn.setOnClickListener(v -> act.nativeGamepadBackPressed());
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.BOTTOM | Gravity.END;
++        lp.rightMargin = dp(20);
++        lp.bottomMargin = dp(20);
++        root.addView(closeMenuBtn, lp);
++    }
++
++    // While the 2 Ship menu is open every touch must reach the menu, so hide the controls
++    // and leave just a button to close it again.
++    private void setMenuMode(boolean on) {
++        menuMode = on;
++        if (on) {
++            if (editing) setEditing(false);
++            releaseAll();
++            stickPointer = -1;
++            camPointer = -1;
++            stickZone.setVisibility(View.GONE);
++            camZone.setVisibility(View.GONE);
++            stickBase.setVisibility(View.GONE);
++            stickKnob.setVisibility(View.GONE);
++            for (Ctl c : ctls) c.view.setVisibility(View.GONE);
++            tray.setVisibility(View.GONE);
++            songsPanel.setVisibility(View.GONE);
++            toast.setVisibility(View.GONE);
++            closeMenuBtn.setVisibility(View.VISIBLE);
++        } else {
++            closeMenuBtn.setVisibility(View.GONE);
++            stickZone.setVisibility(View.VISIBLE);
++            camZone.setVisibility(View.VISIBLE);
++            layoutAll();
++        }
++    }
 +
 +    private void touched() {
 +        lastTouch = System.currentTimeMillis();
@@ -434,6 +496,11 @@ index 0000000..fbbfedc
 +        row2.addView(trayItem("Tatl", v -> tapN64(N64_CUP), true));
 +        row2.addView(trayItem("Minimap", v -> tapN64(N64_L), true));
 +        row2.addView(trayItem("2 Ship menu", v -> act.nativeGamepadBackPressed(), true));
++        row2.addView(trayItem(swipeCamera ? "Camera: swipe" : "Camera: stick", v -> {
++            swipeCamera = !swipeCamera;
++            prefs.edit().putBoolean("swipeCamera", swipeCamera).apply();
++            ((TextView) v).setText(swipeCamera ? "Camera: swipe" : "Camera: stick");
++        }, false));
 +        row2.addView(trayItem("Edit controls", v -> setEditing(true), true));
 +        row2.addView(trayItem("Hide controls", v -> {
 +            controlsHidden = !controlsHidden;
@@ -724,6 +791,18 @@ index 0000000..fbbfedc
 +    }
 +
 +    // Floating movement stick. Double-tap toggles sprint.
++    //  - the stick centre is kept away from the screen edges, so you can always push fully down/left
++    //  - if your thumb slides past the edge of the stick, the stick follows it (no need to come back)
++    //  - a small dead zone stops tiny thumb wobbles from moving Link
++    private static final float STICK_RADIUS_DP = 46f;
++    private static final float STICK_DEADZONE = 0.10f;
++
++    private void clampStickOrigin() {
++        float r = dp(STICK_RADIUS_DP) + dp(14);
++        stickX0 = Math.max(r, Math.min(root.getWidth() - r, stickX0));
++        stickY0 = Math.max(r, Math.min(root.getHeight() - r, stickY0));
++    }
++
 +    private boolean onStickTouch(View v, MotionEvent e) {
 +        touched();
 +        if (editing || controlsHidden) return false;
@@ -735,22 +814,17 @@ index 0000000..fbbfedc
 +                    stickPointer = e.getPointerId(idx);
 +                    stickX0 = e.getX(idx);
 +                    stickY0 = e.getY(idx);
++                    clampStickOrigin();
 +                    long now = System.currentTimeMillis();
 +                    if (now - lastStickDown < 300) act.nativeMmAction(ACT_SPRINT);
 +                    lastStickDown = now;
-+                    placeStick(stickX0, stickY0, stickX0, stickY0);
++                    updateStick(e.getX(idx), e.getY(idx));
 +                    if (tray.getVisibility() == View.VISIBLE) tray.setVisibility(View.GONE);
 +                }
 +                return true;
 +            case MotionEvent.ACTION_MOVE: {
 +                int p = e.findPointerIndex(stickPointer);
-+                if (p < 0) return true;
-+                float dx = e.getX(p) - stickX0, dy = e.getY(p) - stickY0;
-+                float max = dp(60), d = (float) Math.sqrt(dx * dx + dy * dy);
-+                if (d > max) { dx = dx / d * max; dy = dy / d * max; }
-+                act.setAxis(ControllerButtons.AXIS_LX, (short) (dx / max * Short.MAX_VALUE));
-+                act.setAxis(ControllerButtons.AXIS_LY, (short) (dy / max * Short.MAX_VALUE));
-+                placeStick(stickX0, stickY0, stickX0 + dx, stickY0 + dy);
++                if (p >= 0) updateStick(e.getX(p), e.getY(p));
 +                return true;
 +            }
 +            case MotionEvent.ACTION_UP:
@@ -768,18 +842,72 @@ index 0000000..fbbfedc
 +        return true;
 +    }
 +
++    private void updateStick(float tx, float ty) {
++        float max = dp(STICK_RADIUS_DP);
++        float dx = tx - stickX0, dy = ty - stickY0;
++        float d = (float) Math.sqrt(dx * dx + dy * dy);
++        if (d > max) {
++            // drag the stick along with the thumb
++            stickX0 = tx - dx / d * max;
++            stickY0 = ty - dy / d * max;
++            clampStickOrigin();
++            dx = tx - stickX0;
++            dy = ty - stickY0;
++            d = (float) Math.sqrt(dx * dx + dy * dy);
++            if (d > max) { dx = dx / d * max; dy = dy / d * max; d = max; }
++        }
++        float mag = d / max;
++        float out = mag < STICK_DEADZONE ? 0f : (mag - STICK_DEADZONE) / (1f - STICK_DEADZONE);
++        float nx = d > 0 ? dx / d * out : 0, ny = d > 0 ? dy / d * out : 0;
++        act.setAxis(ControllerButtons.AXIS_LX, (short) (nx * Short.MAX_VALUE));
++        act.setAxis(ControllerButtons.AXIS_LY, (short) (ny * Short.MAX_VALUE));
++        placeStick(stickX0, stickY0, stickX0 + dx, stickY0 + dy);
++    }
++
 +    private void placeStick(float bx, float by, float kx, float ky) {
 +        stickBase.setVisibility(View.VISIBLE);
 +        stickKnob.setVisibility(View.VISIBLE);
 +        stickBase.setAlpha(opacity * 0.8f);
 +        stickKnob.setAlpha(opacity);
-+        stickBase.setX(bx - dp(65));
-+        stickBase.setY(by - dp(65));
++        stickBase.setX(bx - dp(STICK_RADIUS_DP + 10));
++        stickBase.setY(by - dp(STICK_RADIUS_DP + 10));
 +        stickKnob.setX(kx - dp(28));
 +        stickKnob.setY(ky - dp(28));
 +    }
 +
 +    // Camera: drag on the right side.
++    //  Swipe mode (default): the camera follows how fast your finger moves, like modern touch games,
++    //  and stops as soon as your finger stops. Stick mode: holding away from where you touched keeps turning.
++    private final Runnable camDecay = new Runnable() {
++        @Override
++        public void run() {
++            if (camPointer == -1 || !swipeCamera) return;
++            if (System.currentTimeMillis() - lastCamMoveWall > 35) {
++                camVx *= 0.5f;
++                camVy *= 0.5f;
++                if (Math.abs(camVx) < 0.02f) camVx = 0;
++                if (Math.abs(camVy) < 0.02f) camVy = 0;
++                sendCam(camVx, camVy);
++            }
++            handler.postDelayed(this, 16);
++        }
++    };
++
++    // After each real swipe, nudge the "typical swipe speed" toward what you just did.
++    private void learnSwipe() {
++        if (gesturePeak < 150f) return; // taps and tiny nudges don't count
++        float peak = Math.max(300f, Math.min(2500f, gesturePeak));
++        typicalSwipe = typicalSwipe * 0.85f + peak * 0.15f;
++        prefs.edit().putFloat("typicalSwipe", typicalSwipe).apply();
++    }
++
++    private void sendCam(float nx, float ny) {
++        nx = Math.max(-1f, Math.min(1f, nx));
++        ny = Math.max(-1f, Math.min(1f, ny));
++        act.setAxis(ControllerButtons.AXIS_RX, (short) (nx * Short.MAX_VALUE));
++        act.setAxis(ControllerButtons.AXIS_RY, (short) (ny * Short.MAX_VALUE));
++    }
++
 +    private boolean onCamTouch(View v, MotionEvent e) {
 +        touched();
 +        if (editing || controlsHidden) return false;
@@ -789,19 +917,63 @@ index 0000000..fbbfedc
 +            case MotionEvent.ACTION_POINTER_DOWN:
 +                if (camPointer == -1 && e.getX(idx) > root.getWidth() * 0.45f) {
 +                    camPointer = e.getPointerId(idx);
-+                    camX0 = e.getX(idx);
-+                    camY0 = e.getY(idx);
++                    camX0 = camLastX = e.getX(idx);
++                    camY0 = camLastY = e.getY(idx);
++                    camLastT = e.getEventTime();
++                    lastCamMoveWall = System.currentTimeMillis();
++                    camVx = camVy = 0;
++                    gesturePeak = 0;
 +                    if (tray.getVisibility() == View.VISIBLE) tray.setVisibility(View.GONE);
++                    if (swipeCamera) handler.post(camDecay);
 +                }
 +                return true;
 +            case MotionEvent.ACTION_MOVE: {
 +                int p = e.findPointerIndex(camPointer);
 +                if (p < 0) return true;
-+                float dx = e.getX(p) - camX0, dy = e.getY(p) - camY0;
-+                float max = dp(51), d = (float) Math.sqrt(dx * dx + dy * dy);
-+                if (d > max) { dx = dx / d * max; dy = dy / d * max; }
-+                act.setAxis(ControllerButtons.AXIS_RX, (short) (dx / max * Short.MAX_VALUE));
-+                act.setAxis(ControllerButtons.AXIS_RY, (short) (dy / max * Short.MAX_VALUE));
++                if (swipeCamera) {
++                    // Use every touch sample the phone reported since the last event (high sampling rate
++                    // phones batch several per frame), so speed is measured accurately.
++                    float sumDx = 0, sumDy = 0;
++                    long t0 = camLastT;
++                    float px = camLastX, py = camLastY;
++                    for (int hIdx = 0; hIdx < e.getHistorySize(); hIdx++) {
++                        float hx = e.getHistoricalX(p, hIdx), hy = e.getHistoricalY(p, hIdx);
++                        sumDx += hx - px;
++                        sumDy += hy - py;
++                        px = hx;
++                        py = hy;
++                    }
++                    sumDx += e.getX(p) - px;
++                    sumDy += e.getY(p) - py;
++                    long now = e.getEventTime();
++                    float dt = Math.max(4, now - t0) / 1000f;
++                    float density = dp(100) / 100f;
++                    float vx = sumDx / dt / density, vy = sumDy / dt / density; // dp per second
++
++                    float speed = (float) Math.sqrt(vx * vx + vy * vy);
++                    if (speed > gesturePeak) gesturePeak = speed;
++
++                    // Ignore tiny wobbles, then a gentle curve: slow swipes = fine aim, fast swipes = big turns.
++                    float tx = 0, ty = 0;
++                    if (speed > 25f) {
++                        float norm = Math.min(1.6f, speed / (typicalSwipe * 1.1f));
++                        float curved = (float) Math.pow(norm, 1.35);
++                        tx = vx / speed * curved;
++                        ty = vy / speed * curved * 0.85f;
++                    }
++                    camVx = camVx * 0.55f + tx * 0.45f;
++                    camVy = camVy * 0.55f + ty * 0.45f;
++                    camLastX = e.getX(p);
++                    camLastY = e.getY(p);
++                    camLastT = now;
++                    lastCamMoveWall = System.currentTimeMillis();
++                    sendCam(camVx, camVy);
++                } else {
++                    float dx = e.getX(p) - camX0, dy = e.getY(p) - camY0;
++                    float max = dp(51), d = (float) Math.sqrt(dx * dx + dy * dy);
++                    if (d > max) { dx = dx / d * max; dy = dy / d * max; }
++                    sendCam(dx / max, dy / max);
++                }
 +                return true;
 +            }
 +            case MotionEvent.ACTION_UP:
@@ -809,8 +981,10 @@ index 0000000..fbbfedc
 +            case MotionEvent.ACTION_CANCEL:
 +                if (e.getActionMasked() == MotionEvent.ACTION_CANCEL || e.getPointerId(idx) == camPointer) {
 +                    camPointer = -1;
-+                    act.setAxis(ControllerButtons.AXIS_RX, (short) 0);
-+                    act.setAxis(ControllerButtons.AXIS_RY, (short) 0);
++                    handler.removeCallbacks(camDecay);
++                    learnSwipe();
++                    camVx = camVy = 0;
++                    sendCam(0, 0);
 +                }
 +                return true;
 +        }
@@ -1999,10 +2173,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..1bbca1e
+index 0000000..6e5147d
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,570 @@
+@@ -0,0 +1,588 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -2488,19 +2662,37 @@ index 0000000..1bbca1e
 +}
 +
 +// ---------------------------------------------------------------- defaults (applied once)
++static void ApplyTouchCameraPreset() {
++    // Tuned for the swipe camera on a phone: camera can't dip into the ground, and a comfortable turn speed.
++    CVarSetFloat("gEnhancements.Camera.FreeLook.MinPitch", -10.0f);
++    CVarSetFloat("gEnhancements.Camera.RightStick.CameraSensitivity.X", 2.0f);
++    CVarSetFloat("gEnhancements.Camera.RightStick.CameraSensitivity.Y", 1.2f);
++    CVarSetInteger("gEnhancements.Camera.RightStick.InvertYAxis", 0);
++}
++
 +static void ApplyPresetOnce() {
-+    if (CVarGetInteger(CVAR_PRESET_VERSION, 0) >= 1) return;
-+    CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
-+    CVarSetInteger("gEnhancements.Masks.FastTransformation", 1);
-+    CVarSetInteger("gEnhancements.Timesavers.FasterSceneTransitions", 1);
-+    CVarSetInteger("gEnhancements.Songs.PauseOwlWarp", 1);
-+    CVarSetInteger("gEnhancements.Cutscenes.SkipEntranceCutscenes", 1);
-+    CVarSetInteger("gEnhancements.Cutscenes.SkipOnePointCutscenes", 1);
-+    CVarSetInteger("gEnhancements.Songs.SkipSoaringCutscene", 1);
-+    CVarSetInteger("gEnhancements.Songs.FasterSongPlayback", 1);
-+    CVarSetFloat(CVAR_SPEED_VALUE, 1.6f);
-+    CVarSetInteger(CVAR_SPEED_MODE, 0);
-+    CVarSetInteger(CVAR_PRESET_VERSION, 1);
++    s32 version = CVarGetInteger(CVAR_PRESET_VERSION, 0);
++    if (version >= 3) return;
++    if (version == 0) {
++        CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
++        CVarSetInteger("gEnhancements.Masks.FastTransformation", 1);
++        CVarSetInteger("gEnhancements.Timesavers.FasterSceneTransitions", 1);
++        CVarSetInteger("gEnhancements.Songs.PauseOwlWarp", 1);
++        CVarSetInteger("gEnhancements.Cutscenes.SkipEntranceCutscenes", 1);
++        CVarSetInteger("gEnhancements.Cutscenes.SkipOnePointCutscenes", 1);
++        CVarSetInteger("gEnhancements.Songs.SkipSoaringCutscene", 1);
++        CVarSetInteger("gEnhancements.Songs.FasterSongPlayback", 1);
++        CVarSetFloat(CVAR_SPEED_VALUE, 1.6f);
++        CVarSetInteger(CVAR_SPEED_MODE, 0);
++    }
++    if (version < 2) {
++        // bigger 2 Ship menu for fingers (takes effect next time the app starts)
++        CVarSetFloat("gSettings.Menu.AndroidScale", 1.8f);
++    }
++    if (version < 3) {
++        ApplyTouchCameraPreset();
++    }
++    CVarSetInteger(CVAR_PRESET_VERSION, 3);
 +    CVarSave();
 +    ShipInit::Init("*");
 +}
