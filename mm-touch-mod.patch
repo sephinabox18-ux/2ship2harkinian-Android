@@ -1,0 +1,763 @@
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
+index fe546c8..d4d6aee 100644
+--- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
++++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
+@@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
+         }
+ 
+         setupControllerOverlay();
++        // Majora's Mask touch mod: editable overlay replaces the stock one.
++        modTouchOverlay = new ModTouchOverlay(this);
++        modTouchOverlay.attach();
+         applyImmersiveFullscreen();
+         attachController();
+     }
+@@ -955,6 +958,11 @@ public class MainActivity extends SDLActivity{
+     // Native method for setting joystick axis value
+     public native void setAxis(int axis, short value);
+ 
++    // Majora's Mask touch mod (mm/2s2h/Enhancements/Touch/MMTouch.cpp)
++    public native void nativeMmSetN64Button(int mask, boolean down);
++    public native void nativeMmSetOverlayActive(boolean active);
++    public native boolean nativeMmAction(int action);
++
+     private Button button1, button2, button3, button4;
+     private Button buttonA, buttonB, buttonX, buttonY;
+     private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
+@@ -962,7 +970,8 @@ public class MainActivity extends SDLActivity{
+     private Button buttonToggle;
+     private FrameLayout leftJoystick;
+     private ImageView leftJoystickKnob;
+-    private View overlayView;
++    View overlayView; // package-private so ModTouchOverlay can keep it hidden
++    private ModTouchOverlay modTouchOverlay;
+     private ViewGroup buttonGroup;
+     private int leftStickPointerId = MotionEvent.INVALID_POINTER_ID;
+     private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
+new file mode 100644
+index 0000000..a25aaa1
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
+@@ -0,0 +1,548 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.graphics.Color;
++import android.graphics.Typeface;
++import android.graphics.drawable.GradientDrawable;
++import android.os.Handler;
++import android.os.Looper;
++import android.util.TypedValue;
++import android.view.Gravity;
++import android.view.MotionEvent;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.FrameLayout;
++import android.widget.LinearLayout;
++import android.widget.TextView;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Majora's Mask touch controls: every button can be moved, resized and hidden (Edit controls),
++ * less-used buttons live in a tray behind the "..." button, and the controls fade when idle.
++ * Buttons send N64 inputs straight to the game (nativeMmSetN64Button), so they don't depend on
++ * controller mappings. The left half is a floating movement stick, the right half drags the camera.
++ */
++public class ModTouchOverlay {
++    // N64 button bits
++    static final int N64_A = 0x8000, N64_B = 0x4000, N64_Z = 0x2000, N64_START = 0x1000;
++    static final int N64_R = 0x0010, N64_L = 0x0020;
++    static final int N64_CUP = 0x0008, N64_CDOWN = 0x0004, N64_CLEFT = 0x0002, N64_CRIGHT = 0x0001;
++
++    static final int KIND_N64 = 0, KIND_JUMP = 1, KIND_SPRINT = 2, KIND_TRAY = 3;
++
++    private static final String PREFS = "com.twoshipfork.mm.touchlayout";
++    private static final long IDLE_FADE_MS = 4000;
++
++    private final MainActivity act;
++    private final SharedPreferences prefs;
++    private final Handler handler = new Handler(Looper.getMainLooper());
++
++    private FrameLayout root;
++    private View stickZone, camZone, stickBase, stickKnob;
++    private LinearLayout tray, editBar;
++    private TextView opacityLabel;
++    private final List<Ctl> ctls = new ArrayList<>();
++
++    private boolean editing = false;
++    private boolean controlsHidden = false;
++    private float opacity;
++    private long lastTouch = 0;
++    private boolean sprintOn = false;
++
++    // stick / camera state
++    private int stickPointer = -1, camPointer = -1;
++    private float stickX0, stickY0, camX0, camY0;
++    private long lastStickDown = 0;
++
++    private class Ctl {
++        final String id, label, sub;
++        final int kind, mask;
++        final float defX, defY, defSize; // centre as fraction of screen, size in dp
++        float x, y, size;
++        boolean hidden;
++        FrameLayout view;
++        TextView text;
++        // edit gesture state
++        float dragDx, dragDy, pinchStartDist, pinchStartSize;
++
++        Ctl(String id, String label, String sub, int kind, int mask, float x, float y, float size) {
++            this.id = id; this.label = label; this.sub = sub; this.kind = kind; this.mask = mask;
++            this.defX = x; this.defY = y; this.defSize = size;
++        }
++    }
++
++    public ModTouchOverlay(MainActivity activity) {
++        act = activity;
++        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++        opacity = prefs.getFloat("opacity", 0.85f);
++
++        // Main screen (defaults match the layout test page, minus the clutter)
++        ctls.add(new Ctl("a", "A", "Action", KIND_N64, N64_A, 0.900f, 0.700f, 80));
++        ctls.add(new Ctl("attack", "\u2694", "Attack", KIND_N64, N64_B, 0.790f, 0.840f, 80));
++        ctls.add(new Ctl("jump", "\u2912", "Jump", KIND_JUMP, 0, 0.945f, 0.470f, 62));
++        ctls.add(new Ctl("shield", "\u26E8", "Shield", KIND_N64, N64_R, 0.770f, 0.600f, 62));
++        ctls.add(new Ctl("cleft", "C\u25C0", "Item", KIND_N64, N64_CLEFT, 0.750f, 0.330f, 60));
++        ctls.add(new Ctl("cdown", "C\u25BC", "Item", KIND_N64, N64_CDOWN, 0.835f, 0.250f, 60));
++        ctls.add(new Ctl("cright", "C\u25B6", "Item", KIND_N64, N64_CRIGHT, 0.920f, 0.330f, 60));
++        ctls.add(new Ctl("target", "\u25CE", "Target", KIND_N64, N64_Z, 0.070f, 0.360f, 64));
++        ctls.add(new Ctl("sprint", "\u00BB", "Sprint", KIND_SPRINT, 0, 0.160f, 0.300f, 50));
++        ctls.add(new Ctl("more", "\u22EF", "", KIND_TRAY, 0, 0.500f, 0.060f, 46));
++    }
++
++    // ------------------------------------------------------------------ setup
++    public void attach() {
++        View content = MainActivity.getContentView();
++        if (!(content instanceof ViewGroup)) return;
++
++        root = new FrameLayout(act);
++        root.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        root.setMotionEventSplittingEnabled(true);
++        ((ViewGroup) content).addView(root);
++
++        // Touch zones behind the buttons
++        stickZone = new View(act);
++        camZone = new View(act);
++        root.addView(camZone, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        root.addView(stickZone, new FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
++        stickZone.setOnTouchListener(this::onStickTouch);
++        camZone.setOnTouchListener(this::onCamTouch);
++
++        stickBase = circle(Color.argb(30, 255, 255, 255), Color.argb(150, 255, 255, 255));
++        stickKnob = circle(Color.argb(110, 255, 255, 255), Color.WHITE);
++        root.addView(stickBase, new FrameLayout.LayoutParams(dp(130), dp(130)));
++        root.addView(stickKnob, new FrameLayout.LayoutParams(dp(56), dp(56)));
++        stickBase.setVisibility(View.GONE);
++        stickKnob.setVisibility(View.GONE);
++
++        for (Ctl c : ctls) {
++            loadCtl(c);
++            buildCtl(c);
++        }
++        buildTray();
++        buildEditBar();
++
++        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> layoutAll());
++        act.nativeMmSetOverlayActive(true);
++        lastTouch = System.currentTimeMillis();
++        handler.post(housekeeping);
++    }
++
++    // Keeps the stock overlay hidden and handles the idle fade.
++    private final Runnable housekeeping = new Runnable() {
++        @Override
++        public void run() {
++            if (act.overlayView != null && act.overlayView.getVisibility() != View.GONE) {
++                act.overlayView.setVisibility(View.GONE);
++            }
++            boolean idle = !editing && System.currentTimeMillis() - lastTouch > IDLE_FADE_MS;
++            float target = controlsHidden ? 0f : (idle ? opacity * 0.3f : opacity);
++            for (Ctl c : ctls) {
++                if (c.view != null && Math.abs(c.view.getAlpha() - target) > 0.01f && !(editing && c.hidden)) {
++                    c.view.animate().alpha(target).setDuration(250).start();
++                }
++            }
++            handler.postDelayed(this, 300);
++        }
++    };
++
++    private void touched() {
++        lastTouch = System.currentTimeMillis();
++    }
++
++    // ------------------------------------------------------------------ building views
++    private void buildCtl(Ctl c) {
++        FrameLayout v = new FrameLayout(act);
++        GradientDrawable bg = new GradientDrawable();
++        bg.setShape(GradientDrawable.OVAL);
++        bg.setColor(Color.argb(40, 255, 255, 255));
++        int edge = Color.argb(150, 255, 255, 255);
++        if (c.mask == N64_A) edge = Color.rgb(77, 139, 232);
++        if (c.mask == N64_B) edge = Color.rgb(76, 175, 106);
++        if ((c.mask & (N64_CLEFT | N64_CDOWN | N64_CRIGHT)) != 0) edge = Color.rgb(232, 194, 61);
++        bg.setStroke(dp(2), edge);
++        v.setBackground(bg);
++
++        TextView t = new TextView(act);
++        t.setTextColor(Color.WHITE);
++        t.setTypeface(Typeface.DEFAULT_BOLD);
++        t.setGravity(Gravity.CENTER);
++        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
++        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        c.view = v;
++        c.text = t;
++        v.setOnTouchListener((view, e) -> onCtlTouch(c, e));
++        root.addView(v);
++    }
++
++    private void buildTray() {
++        tray = new LinearLayout(act);
++        tray.setOrientation(LinearLayout.HORIZONTAL);
++        tray.setPadding(dp(8), dp(6), dp(8), dp(6));
++        GradientDrawable bg = new GradientDrawable();
++        bg.setColor(Color.argb(200, 14, 10, 26));
++        bg.setCornerRadius(dp(14));
++        bg.setStroke(dp(1), Color.argb(90, 246, 231, 161));
++        tray.setBackground(bg);
++        tray.setVisibility(View.GONE);
++
++        tray.addView(trayButton("Pause", v -> tapN64(N64_START)));
++        tray.addView(trayButton("Tatl", v -> tapN64(N64_CUP)));
++        tray.addView(trayButton("Minimap", v -> tapN64(N64_L)));
++        tray.addView(trayButton("2 Ship menu", v -> { act.nativeGamepadBackPressed(); }));
++        tray.addView(trayButton("Edit controls", v -> setEditing(true)));
++        tray.addView(trayButton("Hide controls", v -> {
++            controlsHidden = !controlsHidden;
++            ((TextView) v).setText(controlsHidden ? "Show controls" : "Hide controls");
++        }));
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
++        lp.topMargin = dp(56);
++        root.addView(tray, lp);
++    }
++
++    private TextView trayButton(String label, View.OnClickListener onClick) {
++        TextView b = new TextView(act);
++        b.setText(label);
++        b.setTextColor(Color.WHITE);
++        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
++        b.setPadding(dp(12), dp(9), dp(12), dp(9));
++        b.setOnClickListener(v -> {
++            touched();
++            onClick.onClick(v);
++            if (!label.startsWith("Hide") && !label.startsWith("Show")) tray.setVisibility(View.GONE);
++        });
++        return b;
++    }
++
++    private void buildEditBar() {
++        editBar = new LinearLayout(act);
++        editBar.setOrientation(LinearLayout.HORIZONTAL);
++        editBar.setPadding(dp(8), dp(6), dp(8), dp(6));
++        GradientDrawable bg = new GradientDrawable();
++        bg.setColor(Color.argb(220, 14, 10, 26));
++        bg.setCornerRadius(dp(14));
++        bg.setStroke(dp(1), Color.argb(140, 63, 182, 168));
++        editBar.setBackground(bg);
++        editBar.setVisibility(View.GONE);
++
++        editBar.addView(editButton("Done", v -> setEditing(false)));
++        editBar.addView(editButton("See-through \u2212", v -> setOpacity(opacity - 0.1f)));
++        opacityLabel = editButton("", null);
++        editBar.addView(opacityLabel);
++        editBar.addView(editButton("See-through +", v -> setOpacity(opacity + 0.1f)));
++        editBar.addView(editButton("Reset layout", v -> resetLayout()));
++
++        TextView help = new TextView(act);
++        help.setText("Drag to move \u00B7 pinch to resize \u00B7 double-tap to hide/show");
++        help.setTextColor(Color.argb(200, 255, 255, 255));
++        help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        help.setPadding(dp(10), dp(9), dp(6), dp(9));
++        editBar.addView(help);
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
++        lp.bottomMargin = dp(14);
++        root.addView(editBar, lp);
++        updateOpacityLabel();
++    }
++
++    private TextView editButton(String label, View.OnClickListener onClick) {
++        TextView b = new TextView(act);
++        b.setText(label);
++        b.setTextColor(Color.WHITE);
++        b.setTypeface(Typeface.DEFAULT_BOLD);
++        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
++        b.setPadding(dp(10), dp(9), dp(10), dp(9));
++        if (onClick != null) b.setOnClickListener(onClick);
++        return b;
++    }
++
++    private View circle(int fill, int stroke) {
++        View v = new View(act);
++        GradientDrawable d = new GradientDrawable();
++        d.setShape(GradientDrawable.OVAL);
++        d.setColor(fill);
++        d.setStroke(dp(2), stroke);
++        v.setBackground(d);
++        return v;
++    }
++
++    // ------------------------------------------------------------------ layout
++    private void layoutAll() {
++        int w = root.getWidth(), h = root.getHeight();
++        if (w == 0 || h == 0) return;
++
++        FrameLayout.LayoutParams sz = (FrameLayout.LayoutParams) stickZone.getLayoutParams();
++        sz.width = (int) (w * 0.45f);
++        stickZone.setLayoutParams(sz);
++
++        for (Ctl c : ctls) {
++            int px = dp(c.size);
++            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px, px);
++            lp.leftMargin = (int) (c.x * w - px / 2f);
++            lp.topMargin = (int) (c.y * h - px / 2f);
++            c.view.setLayoutParams(lp);
++            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * (c.sub.isEmpty() ? 0.42f : 0.22f));
++            boolean show = !c.hidden || editing;
++            c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++            if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
++        }
++    }
++
++    private void loadCtl(Ctl c) {
++        String s = prefs.getString("ctl_" + c.id, null);
++        c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = false;
++        if (s == null) return;
++        try {
++            String[] p = s.split(",");
++            c.x = Float.parseFloat(p[0]);
++            c.y = Float.parseFloat(p[1]);
++            c.size = Float.parseFloat(p[2]);
++            c.hidden = p[3].equals("1");
++        } catch (Exception ignored) {
++        }
++    }
++
++    private void saveAll() {
++        SharedPreferences.Editor e = prefs.edit();
++        for (Ctl c : ctls) {
++            e.putString("ctl_" + c.id, c.x + "," + c.y + "," + c.size + "," + (c.hidden ? "1" : "0"));
++        }
++        e.putFloat("opacity", opacity);
++        e.apply();
++    }
++
++    private void resetLayout() {
++        for (Ctl c : ctls) {
++            c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = false;
++        }
++        layoutAll();
++    }
++
++    private void setOpacity(float o) {
++        opacity = Math.max(0.2f, Math.min(1f, o));
++        updateOpacityLabel();
++    }
++
++    private void updateOpacityLabel() {
++        if (opacityLabel != null) opacityLabel.setText(Math.round(opacity * 100) + "%");
++    }
++
++    private void setEditing(boolean on) {
++        editing = on;
++        editBar.setVisibility(on ? View.VISIBLE : View.GONE);
++        tray.setVisibility(View.GONE);
++        if (on) {
++            controlsHidden = false;
++            releaseAll();
++        } else {
++            saveAll();
++        }
++        layoutAll();
++        touched();
++    }
++
++    // ------------------------------------------------------------------ input
++    private void tapN64(int mask) {
++        act.nativeMmSetN64Button(mask, true);
++        handler.postDelayed(() -> act.nativeMmSetN64Button(mask, false), 120);
++    }
++
++    private void releaseAll() {
++        for (Ctl c : ctls) {
++            if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.mask, false);
++        }
++        act.setAxis(ControllerButtons.AXIS_LX, (short) 0);
++        act.setAxis(ControllerButtons.AXIS_LY, (short) 0);
++        act.setAxis(ControllerButtons.AXIS_RX, (short) 0);
++        act.setAxis(ControllerButtons.AXIS_RY, (short) 0);
++    }
++
++    private void setPressed(Ctl c, boolean pressed) {
++        c.view.animate().scaleX(pressed ? 0.92f : 1f).scaleY(pressed ? 0.92f : 1f).setDuration(60).start();
++    }
++
++    private boolean onCtlTouch(Ctl c, MotionEvent e) {
++        touched();
++        if (editing) return onCtlEdit(c, e);
++        if (controlsHidden) return false;
++
++        switch (e.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++                setPressed(c, true);
++                c.view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
++                switch (c.kind) {
++                    case KIND_N64: act.nativeMmSetN64Button(c.mask, true); break;
++                    case KIND_JUMP: act.nativeMmAction(1); break;
++                    case KIND_SPRINT: setSprintUi(act.nativeMmAction(2)); break;
++                    case KIND_TRAY: tray.setVisibility(tray.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE); break;
++                }
++                return true;
++            case MotionEvent.ACTION_UP:
++            case MotionEvent.ACTION_CANCEL:
++                setPressed(c, false);
++                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.mask, false);
++                return true;
++        }
++        return true;
++    }
++
++    private void setSprintUi(boolean on) {
++        sprintOn = on;
++        for (Ctl c : ctls) {
++            if (c.kind == KIND_SPRINT) {
++                GradientDrawable bg = (GradientDrawable) c.view.getBackground();
++                bg.setColor(on ? Color.argb(120, 232, 163, 61) : Color.argb(40, 255, 255, 255));
++            }
++        }
++    }
++
++    private long lastEditTap = 0;
++
++    private boolean onCtlEdit(Ctl c, MotionEvent e) {
++        int w = root.getWidth(), h = root.getHeight();
++        switch (e.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN: {
++                long now = System.currentTimeMillis();
++                if (now - lastEditTap < 300) {
++                    c.hidden = !c.hidden;
++                    layoutAll();
++                }
++                lastEditTap = now;
++                c.dragDx = e.getRawX() - c.x * w;
++                c.dragDy = e.getRawY() - c.y * h;
++                return true;
++            }
++            case MotionEvent.ACTION_POINTER_DOWN:
++                if (e.getPointerCount() == 2) {
++                    c.pinchStartDist = spacing(e);
++                    c.pinchStartSize = c.size;
++                }
++                return true;
++            case MotionEvent.ACTION_MOVE:
++                if (e.getPointerCount() >= 2 && c.pinchStartDist > 0) {
++                    float scale = spacing(e) / c.pinchStartDist;
++                    c.size = Math.max(36f, Math.min(160f, c.pinchStartSize * scale));
++                } else if (e.getPointerCount() == 1) {
++                    c.x = clamp((e.getRawX() - c.dragDx) / w);
++                    c.y = clamp((e.getRawY() - c.dragDy) / h);
++                }
++                layoutAll();
++                return true;
++            case MotionEvent.ACTION_POINTER_UP:
++                c.pinchStartDist = 0;
++                return true;
++        }
++        return true;
++    }
++
++    private static float spacing(MotionEvent e) {
++        float dx = e.getX(0) - e.getX(1), dy = e.getY(0) - e.getY(1);
++        return (float) Math.sqrt(dx * dx + dy * dy);
++    }
++
++    private static float clamp(float v) {
++        return Math.max(0.02f, Math.min(0.98f, v));
++    }
++
++    // Floating movement stick: appears under the thumb. Double-tap toggles sprint.
++    private boolean onStickTouch(View v, MotionEvent e) {
++        touched();
++        if (editing || controlsHidden) return false;
++        int idx = e.getActionIndex();
++        switch (e.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++            case MotionEvent.ACTION_POINTER_DOWN:
++                if (stickPointer == -1) {
++                    stickPointer = e.getPointerId(idx);
++                    stickX0 = e.getX(idx);
++                    stickY0 = e.getY(idx);
++                    long now = System.currentTimeMillis();
++                    if (now - lastStickDown < 300) setSprintUi(act.nativeMmAction(2));
++                    lastStickDown = now;
++                    placeStick(stickX0, stickY0, stickX0, stickY0);
++                }
++                return true;
++            case MotionEvent.ACTION_MOVE: {
++                int p = e.findPointerIndex(stickPointer);
++                if (p < 0) return true;
++                float dx = e.getX(p) - stickX0, dy = e.getY(p) - stickY0;
++                float max = dp(60), d = (float) Math.sqrt(dx * dx + dy * dy);
++                if (d > max) { dx = dx / d * max; dy = dy / d * max; }
++                act.setAxis(ControllerButtons.AXIS_LX, (short) (dx / max * Short.MAX_VALUE));
++                act.setAxis(ControllerButtons.AXIS_LY, (short) (dy / max * Short.MAX_VALUE));
++                placeStick(stickX0, stickY0, stickX0 + dx, stickY0 + dy);
++                return true;
++            }
++            case MotionEvent.ACTION_UP:
++            case MotionEvent.ACTION_POINTER_UP:
++            case MotionEvent.ACTION_CANCEL:
++                if (e.getActionMasked() == MotionEvent.ACTION_CANCEL || e.getPointerId(idx) == stickPointer) {
++                    stickPointer = -1;
++                    act.setAxis(ControllerButtons.AXIS_LX, (short) 0);
++                    act.setAxis(ControllerButtons.AXIS_LY, (short) 0);
++                    stickBase.setVisibility(View.GONE);
++                    stickKnob.setVisibility(View.GONE);
++                }
++                return true;
++        }
++        return true;
++    }
++
++    private void placeStick(float bx, float by, float kx, float ky) {
++        stickBase.setVisibility(View.VISIBLE);
++        stickKnob.setVisibility(View.VISIBLE);
++        stickBase.setAlpha(opacity * 0.8f);
++        stickKnob.setAlpha(opacity);
++        stickBase.setX(bx - dp(65));
++        stickBase.setY(by - dp(65));
++        stickKnob.setX(kx - dp(28));
++        stickKnob.setY(ky - dp(28));
++    }
++
++    // Camera: drag on the right side (works like holding the right stick away from centre).
++    private boolean onCamTouch(View v, MotionEvent e) {
++        touched();
++        if (editing || controlsHidden) return false;
++        int idx = e.getActionIndex();
++        switch (e.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++            case MotionEvent.ACTION_POINTER_DOWN:
++                if (camPointer == -1 && e.getX(idx) > root.getWidth() * 0.45f) {
++                    camPointer = e.getPointerId(idx);
++                    camX0 = e.getX(idx);
++                    camY0 = e.getY(idx);
++                    if (tray.getVisibility() == View.VISIBLE) tray.setVisibility(View.GONE);
++                }
++                return true;
++            case MotionEvent.ACTION_MOVE: {
++                int p = e.findPointerIndex(camPointer);
++                if (p < 0) return true;
++                float dx = e.getX(p) - camX0, dy = e.getY(p) - camY0;
++                float max = dp(51), d = (float) Math.sqrt(dx * dx + dy * dy);
++                if (d > max) { dx = dx / d * max; dy = dy / d * max; }
++                act.setAxis(ControllerButtons.AXIS_RX, (short) (dx / max * Short.MAX_VALUE));
++                act.setAxis(ControllerButtons.AXIS_RY, (short) (dy / max * Short.MAX_VALUE));
++                return true;
++            }
++            case MotionEvent.ACTION_UP:
++            case MotionEvent.ACTION_POINTER_UP:
++            case MotionEvent.ACTION_CANCEL:
++                if (e.getActionMasked() == MotionEvent.ACTION_CANCEL || e.getPointerId(idx) == camPointer) {
++                    camPointer = -1;
++                    act.setAxis(ControllerButtons.AXIS_RX, (short) 0);
++                    act.setAxis(ControllerButtons.AXIS_RY, (short) 0);
++                }
++                return true;
++        }
++        return true;
++    }
++
++    private int dp(float v) {
++        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, act.getResources().getDisplayMetrics()));
++    }
++}
+diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
+new file mode 100644
+index 0000000..95e992d
+--- /dev/null
++++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
+@@ -0,0 +1,139 @@
++// Majora's Mask touch mod (batch 1): bridge between the custom Android touch overlay and the game.
++//  - Touch buttons for any N64 input (items, target, shield...) are injected straight into the pad (padmgr.c)
++//  - Jump button and sprint toggle
++//  - A one-time preset that switches on the built-in 2 Ship features we use
++#include <libultraship/bridge/consolevariablebridge.h>
++#include "2s2h/GameInteractor/GameInteractor.h"
++#include "2s2h/ShipInit.hpp"
++
++extern "C" {
++#include "variables.h"
++#include "assets/objects/gameplay_keep/gameplay_keep.h"
++void func_80834DB8(Player* player, PlayerAnimationHeader* anim, f32 speed, PlayState* play);
++}
++
++#ifdef __ANDROID__
++#include <jni.h>
++#endif
++
++// ---------------------------------------------------------------- shared with padmgr.c
++extern "C" {
++volatile u32 gMmTouchN64Buttons = 0;  // N64 buttons currently held on the touch overlay
++volatile s32 gMmTouchOverlayActive = 0; // when set, C-buttons only come from the overlay (right stick = camera)
++}
++
++static volatile bool sJumpRequested = false;
++static bool sSprintOn = false;
++static s32 sStoppedFrames = 0;
++
++#define CVAR_SPEED_MODE "gCheats.SpeedModifier.Mode"
++#define CVAR_SPEED_VALUE "gCheats.SpeedModifier.Value"
++#define CVAR_JUMP_HEIGHT "gMMTouch.JumpHeight"
++#define CVAR_PRESET_VERSION "gMMTouch.PresetVersion"
++
++static void SetSprint(bool on) {
++    sSprintOn = on;
++    sStoppedFrames = 0;
++    // Uses 2 Ship's own speed modifier (covers running and swimming); mode 1 = always on.
++    CVarSetInteger(CVAR_SPEED_MODE, on ? 1 : 0);
++    ShipInit::Init(CVAR_SPEED_MODE);
++}
++
++// ---------------------------------------------------------------- jump
++static bool CanJump(Player* player) {
++    if (player == nullptr || gPlayState == nullptr) return false;
++    if ((player->transformation != PLAYER_FORM_HUMAN) && (player->transformation != PLAYER_FORM_FIERCE_DEITY)) return false;
++    if (!(player->actor.bgCheckFlags & BGCHECKFLAG_GROUND)) return false;
++    if (player->stateFlags1 & (PLAYER_STATE1_TALKING | PLAYER_STATE1_DEAD | PLAYER_STATE1_CARRYING_ACTOR |
++                               PLAYER_STATE1_2000 | PLAYER_STATE1_4000 | PLAYER_STATE1_100000 |
++                               PLAYER_STATE1_800000 | PLAYER_STATE1_8000000 | PLAYER_STATE1_20000000 |
++                               PLAYER_STATE1_80000000)) {
++        return false;
++    }
++    if (gPlayState->msgCtx.msgMode != MSGMODE_NONE) return false;
++    if (Player_InCsMode(gPlayState)) return false;
++    return true;
++}
++
++static void OnPlayerInputs(Input* input) {
++    Player* player = GET_PLAYER(gPlayState);
++
++    if (sJumpRequested) {
++        sJumpRequested = false;
++        if (CanJump(player)) {
++            func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump,
++                          CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f), gPlayState);
++        }
++    }
++
++    // Sprint switches itself off when Link stops moving.
++    if (sSprintOn && player != nullptr) {
++        if (player->speedXZ < 0.5f) {
++            if (++sStoppedFrames > 8) SetSprint(false);
++        } else {
++            sStoppedFrames = 0;
++        }
++    }
++}
++
++// ---------------------------------------------------------------- default settings (applied once)
++static void ApplyPresetOnce() {
++    if (CVarGetInteger(CVAR_PRESET_VERSION, 0) >= 1) return;
++    CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
++    CVarSetInteger("gEnhancements.Masks.FastTransformation", 1);
++    CVarSetInteger("gEnhancements.Timesavers.FasterSceneTransitions", 1);
++    CVarSetInteger("gEnhancements.Songs.PauseOwlWarp", 1);
++    CVarSetInteger("gEnhancements.Cutscenes.SkipEntranceCutscenes", 1);
++    CVarSetInteger("gEnhancements.Cutscenes.SkipOnePointCutscenes", 1);
++    CVarSetInteger("gEnhancements.Songs.SkipSoaringCutscene", 1);
++    CVarSetInteger("gEnhancements.Songs.FasterSongPlayback", 1);
++    CVarSetFloat(CVAR_SPEED_VALUE, 1.6f);
++    CVarSetInteger(CVAR_SPEED_MODE, 0);
++    CVarSetInteger(CVAR_PRESET_VERSION, 1);
++    CVarSave();
++    ShipInit::Init("*");
++}
++
++void RegisterMMTouch() {
++    static bool hookRegistered = false;
++    if (!hookRegistered) {
++        hookRegistered = true;
++        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPassPlayerInputs>(OnPlayerInputs);
++    }
++    ApplyPresetOnce();
++}
++
++static RegisterShipInitFunc initFunc(RegisterMMTouch, {});
++
++// ---------------------------------------------------------------- JNI entry points (MainActivity / ModTouchOverlay)
++#ifdef __ANDROID__
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetN64Button(JNIEnv*, jobject, jint mask,
++                                                                                           jboolean down) {
++    if (down) {
++        gMmTouchN64Buttons |= (u32)mask;
++    } else {
++        gMmTouchN64Buttons &= ~(u32)mask;
++    }
++}
++
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetOverlayActive(JNIEnv*, jobject,
++                                                                                               jboolean active) {
++    gMmTouchOverlayActive = active ? 1 : 0;
++    if (!active) gMmTouchN64Buttons = 0;
++}
++
++// action: 1 = jump, 2 = toggle sprint. Returns the sprint state.
++extern "C" JNIEXPORT jboolean JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmAction(JNIEnv*, jobject,
++                                                                                          jint action) {
++    if (action == 1) {
++        sJumpRequested = true;
++    } else if (action == 2) {
++        SetSprint(!sSprintOn);
++    }
++    return sSprintOn ? JNI_TRUE : JNI_FALSE;
++}
++
++extern "C" JNIEXPORT jboolean JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSprintOn(JNIEnv*, jobject) {
++    return sSprintOn ? JNI_TRUE : JNI_FALSE;
++}
++#endif
+diff --git a/mm/src/code/padmgr.c b/mm/src/code/padmgr.c
+index f0e57da..972fb45 100644
+--- a/mm/src/code/padmgr.c
++++ b/mm/src/code/padmgr.c
+@@ -441,6 +441,9 @@ void PadMgr_AdjustInput(Input* input) {
+ /**
+  * Updates `sPadMgrInstance->inputs` based on the error response of each controller
+  */
++extern volatile u32 gMmTouchN64Buttons;
++extern volatile s32 gMmTouchOverlayActive;
++
+ void PadMgr_UpdateInputs(void) {
+     s32 diff;
+     Input* input = &sPadMgrInstance->inputs[0];
+@@ -490,6 +493,13 @@ void PadMgr_UpdateInputs(void) {
+             input->cur.err_no = pad->err_no;
+         }
+ 
++        // Majora's Mask touch mod: buttons held on the touch overlay. While the overlay is active the right
++        // stick is the camera, so C-buttons only come from the overlay's item buttons.
++        if ((i == 0) && gMmTouchOverlayActive) {
++            input->cur.button &= ~(BTN_CUP | BTN_CDOWN | BTN_CLEFT | BTN_CRIGHT);
++            input->cur.button |= gMmTouchN64Buttons;
++        }
++
+         // If opposed directions on the D-Pad are pressed at the same time, mask both out
+         if ((input->cur.button & (BTN_DDOWN | BTN_DUP)) == (BTN_DDOWN | BTN_DUP)) {
+             input->cur.button &= ~(BTN_DDOWN | BTN_DUP);
