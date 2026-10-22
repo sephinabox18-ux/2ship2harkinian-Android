@@ -41,10 +41,10 @@ index fe546c8..c3ea69c 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..108c293
+index 0000000..0fc81d6
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,950 @@
+@@ -0,0 +1,958 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -138,7 +138,7 @@ index 0000000..108c293
 +        final int kind, value, style;
 +        final float defX, defY, defSize;
 +        float x, y, size;
-+        boolean hidden;
++        boolean hidden, defHidden;
 +        View view;
 +        TextView text;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
@@ -168,6 +168,13 @@ index 0000000..108c293
 +        sprintCtl = new Ctl("sprint", "\u00BB", "Sprint", KIND_ACTION, ACT_SPRINT, STYLE_PLAIN, 0.160f, 0.300f, 50);
 +        ctls.add(sprintCtl);
 +        ctls.add(new Ctl("more", "\u2022\u2022\u2022", "", KIND_TRAY, 0, STYLE_START, 0.700f, 0.075f, 44));
++        // Optional buttons: hidden until you show them in Edit controls (double-tap)
++        Ctl start = new Ctl("start", "START", "", KIND_N64, N64_START, STYLE_START, 0.640f, 0.075f, 50);
++        start.defHidden = true;
++        ctls.add(start);
++        Ctl map = new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50);
++        map.defHidden = true;
++        ctls.add(map);
 +        skipCtl = new Ctl("skip", "Skip \u25B6\u25B6", "", KIND_SKIP, ACT_SKIP, STYLE_PLAIN, 0.500f, 0.860f, 64);
 +        ctls.add(skipCtl);
 +        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
@@ -622,7 +629,8 @@ index 0000000..108c293
 +            lp.leftMargin = (int) (c.x * w - pw / 2f);
 +            lp.topMargin = (int) (c.y * h - px / 2f);
 +            c.view.setLayoutParams(lp);
-+            float ratio = c.kind == KIND_SKIP ? 0.30f : (c.sub.isEmpty() ? (c.style == STYLE_C ? 0.36f : 0.42f) : 0.24f);
++            float ratio = c.kind == KIND_SKIP ? 0.30f
++                    : (c.sub.isEmpty() ? (c.label.length() > 3 ? 0.22f : (c.style == STYLE_C ? 0.36f : 0.42f)) : 0.24f);
 +            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
 +            if (c.kind != KIND_SKIP) {
 +                boolean show = !c.hidden || editing;
@@ -634,7 +642,7 @@ index 0000000..108c293
 +
 +    private void loadCtl(Ctl c) {
 +        String s = prefs.getString("ctl_" + c.id, null);
-+        c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = false;
++        c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = c.defHidden;
 +        if (s == null) return;
 +        try {
 +            String[] p = s.split(",");
@@ -657,7 +665,7 @@ index 0000000..108c293
 +
 +    private void resetLayout() {
 +        for (Ctl c : ctls) {
-+            c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = false;
++            c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = c.defHidden;
 +        }
 +        layoutAll();
 +    }
