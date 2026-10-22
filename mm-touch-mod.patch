@@ -1,5 +1,5 @@
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..d4d6aee 100644
+index fe546c8..c3ea69c 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
@@ -12,19 +12,24 @@ index fe546c8..d4d6aee 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +958,11 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +958,16 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
 +    // Majora's Mask touch mod (mm/2s2h/Enhancements/Touch/MMTouch.cpp)
 +    public native void nativeMmSetN64Button(int mask, boolean down);
 +    public native void nativeMmSetOverlayActive(boolean active);
-+    public native boolean nativeMmAction(int action);
++    public native void nativeMmAction(int action);
++    public native long nativeMmGetState();
++    public native String nativeMmGetQuest();
++    public native String nativeMmPollMessage();
++    public native String nativeMmGetSongs();
++    public native void nativeMmPlaySong(int index);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +970,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +975,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -36,10 +41,10 @@ index fe546c8..d4d6aee 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..a25aaa1
+index 0000000..fbbfedc
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,776 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -51,6 +56,7 @@ index 0000000..a25aaa1
 +import android.os.Looper;
 +import android.util.TypedValue;
 +import android.view.Gravity;
++import android.view.HapticFeedbackConstants;
 +import android.view.MotionEvent;
 +import android.view.View;
 +import android.view.ViewGroup;
@@ -62,10 +68,9 @@ index 0000000..a25aaa1
 +import java.util.List;
 +
 +/**
-+ * Majora's Mask touch controls: every button can be moved, resized and hidden (Edit controls),
-+ * less-used buttons live in a tray behind the "..." button, and the controls fade when idle.
-+ * Buttons send N64 inputs straight to the game (nativeMmSetN64Button), so they don't depend on
-+ * controller mappings. The left half is a floating movement stick, the right half drags the camera.
++ * Majora's Mask touch controls, styled after the N64 Zelda HUD.
++ * Every button (and the quest panel) can be moved, resized and hidden in Edit controls.
++ * Less-used actions live in the tray behind the "..." button. Game actions are sent to MMTouch.cpp.
 + */
 +public class ModTouchOverlay {
 +    // N64 button bits
@@ -73,7 +78,19 @@ index 0000000..a25aaa1
 +    static final int N64_R = 0x0010, N64_L = 0x0020;
 +    static final int N64_CUP = 0x0008, N64_CDOWN = 0x0004, N64_CLEFT = 0x0002, N64_CRIGHT = 0x0001;
 +
-+    static final int KIND_N64 = 0, KIND_JUMP = 1, KIND_SPRINT = 2, KIND_TRAY = 3;
++    // Native actions (MMTouch.cpp)
++    static final int ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6,
++            ACT_TRAIL = 7;
++    // Native state bits
++    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32;
++
++    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4;
++    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
++
++    // Zelda HUD palette
++    static final int GOLD = Color.rgb(232, 196, 92);
++    static final int GOLD_SOFT = Color.argb(150, 232, 196, 92);
++    static final int PANEL_BG = Color.argb(205, 12, 10, 22);
 +
 +    private static final String PREFS = "com.twoshipfork.mm.touchlayout";
 +    private static final long IDLE_FADE_MS = 4000;
@@ -84,34 +101,40 @@ index 0000000..a25aaa1
 +
 +    private FrameLayout root;
 +    private View stickZone, camZone, stickBase, stickKnob;
-+    private LinearLayout tray, editBar;
-+    private TextView opacityLabel;
++    private LinearLayout tray, editBar, songsPanel, songsList;
++    private TextView opacityLabel, toast, trailItem, questItem;
 +    private final List<Ctl> ctls = new ArrayList<>();
++    private Ctl questCtl, skipCtl, sprintCtl;
++    private TextView questWhere, questTitle, questText;
 +
 +    private boolean editing = false;
 +    private boolean controlsHidden = false;
++    private boolean questPanelOn;
 +    private float opacity;
 +    private long lastTouch = 0;
-+    private boolean sprintOn = false;
 +
-+    // stick / camera state
++    private int lastFrame = -1;
++    private long lastFrameChange = 0;
++    private int stateBits = 0;
++    private String lastQuest = "";
++    private String lastSongs = "";
++
 +    private int stickPointer = -1, camPointer = -1;
 +    private float stickX0, stickY0, camX0, camY0;
 +    private long lastStickDown = 0;
 +
 +    private class Ctl {
 +        final String id, label, sub;
-+        final int kind, mask;
-+        final float defX, defY, defSize; // centre as fraction of screen, size in dp
++        final int kind, value, style;
++        final float defX, defY, defSize;
 +        float x, y, size;
 +        boolean hidden;
-+        FrameLayout view;
++        View view;
 +        TextView text;
-+        // edit gesture state
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
-+        Ctl(String id, String label, String sub, int kind, int mask, float x, float y, float size) {
-+            this.id = id; this.label = label; this.sub = sub; this.kind = kind; this.mask = mask;
++        Ctl(String id, String label, String sub, int kind, int value, int style, float x, float y, float size) {
++            this.id = id; this.label = label; this.sub = sub; this.kind = kind; this.value = value; this.style = style;
 +            this.defX = x; this.defY = y; this.defSize = size;
 +        }
 +    }
@@ -120,18 +143,23 @@ index 0000000..a25aaa1
 +        act = activity;
 +        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        opacity = prefs.getFloat("opacity", 0.85f);
++        questPanelOn = prefs.getBoolean("questPanel", true);
 +
-+        // Main screen (defaults match the layout test page, minus the clutter)
-+        ctls.add(new Ctl("a", "A", "Action", KIND_N64, N64_A, 0.900f, 0.700f, 80));
-+        ctls.add(new Ctl("attack", "\u2694", "Attack", KIND_N64, N64_B, 0.790f, 0.840f, 80));
-+        ctls.add(new Ctl("jump", "\u2912", "Jump", KIND_JUMP, 0, 0.945f, 0.470f, 62));
-+        ctls.add(new Ctl("shield", "\u26E8", "Shield", KIND_N64, N64_R, 0.770f, 0.600f, 62));
-+        ctls.add(new Ctl("cleft", "C\u25C0", "Item", KIND_N64, N64_CLEFT, 0.750f, 0.330f, 60));
-+        ctls.add(new Ctl("cdown", "C\u25BC", "Item", KIND_N64, N64_CDOWN, 0.835f, 0.250f, 60));
-+        ctls.add(new Ctl("cright", "C\u25B6", "Item", KIND_N64, N64_CRIGHT, 0.920f, 0.330f, 60));
-+        ctls.add(new Ctl("target", "\u25CE", "Target", KIND_N64, N64_Z, 0.070f, 0.360f, 64));
-+        ctls.add(new Ctl("sprint", "\u00BB", "Sprint", KIND_SPRINT, 0, 0.160f, 0.300f, 50));
-+        ctls.add(new Ctl("more", "\u22EF", "", KIND_TRAY, 0, 0.500f, 0.060f, 46));
++        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
++        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
++        ctls.add(new Ctl("jump", "\u2191", "Jump", KIND_ACTION, ACT_JUMP, STYLE_PLAIN, 0.945f, 0.470f, 60));
++        ctls.add(new Ctl("shield", "R", "Shield", KIND_N64, N64_R, STYLE_PLAIN, 0.770f, 0.600f, 60));
++        ctls.add(new Ctl("cleft", "\u25C0", "", KIND_N64, N64_CLEFT, STYLE_C, 0.750f, 0.330f, 58));
++        ctls.add(new Ctl("cdown", "\u25BC", "", KIND_N64, N64_CDOWN, STYLE_C, 0.835f, 0.250f, 58));
++        ctls.add(new Ctl("cright", "\u25B6", "", KIND_N64, N64_CRIGHT, STYLE_C, 0.920f, 0.330f, 58));
++        ctls.add(new Ctl("target", "Z", "Target", KIND_N64, N64_Z, STYLE_PLAIN, 0.070f, 0.360f, 64));
++        sprintCtl = new Ctl("sprint", "\u00BB", "Sprint", KIND_ACTION, ACT_SPRINT, STYLE_PLAIN, 0.160f, 0.300f, 50);
++        ctls.add(sprintCtl);
++        ctls.add(new Ctl("more", "\u2022\u2022\u2022", "", KIND_TRAY, 0, STYLE_START, 0.700f, 0.075f, 44));
++        skipCtl = new Ctl("skip", "Skip \u25B6\u25B6", "", KIND_SKIP, ACT_SKIP, STYLE_PLAIN, 0.500f, 0.860f, 64);
++        ctls.add(skipCtl);
++        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
++        ctls.add(questCtl);
 +    }
 +
 +    // ------------------------------------------------------------------ setup
@@ -144,7 +172,6 @@ index 0000000..a25aaa1
 +        root.setMotionEventSplittingEnabled(true);
 +        ((ViewGroup) content).addView(root);
 +
-+        // Touch zones behind the buttons
 +        stickZone = new View(act);
 +        camZone = new View(act);
 +        root.addView(camZone, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -152,8 +179,8 @@ index 0000000..a25aaa1
 +        stickZone.setOnTouchListener(this::onStickTouch);
 +        camZone.setOnTouchListener(this::onCamTouch);
 +
-+        stickBase = circle(Color.argb(30, 255, 255, 255), Color.argb(150, 255, 255, 255));
-+        stickKnob = circle(Color.argb(110, 255, 255, 255), Color.WHITE);
++        stickBase = disc(Color.argb(40, 255, 255, 255), GOLD_SOFT, 2);
++        stickKnob = disc(Color.argb(120, 255, 255, 255), GOLD, 2);
 +        root.addView(stickBase, new FrameLayout.LayoutParams(dp(130), dp(130)));
 +        root.addView(stickKnob, new FrameLayout.LayoutParams(dp(56), dp(56)));
 +        stickBase.setVisibility(View.GONE);
@@ -161,18 +188,21 @@ index 0000000..a25aaa1
 +
 +        for (Ctl c : ctls) {
 +            loadCtl(c);
-+            buildCtl(c);
++            if (c.kind == KIND_PANEL) buildQuestPanel(c);
++            else buildCtl(c);
 +        }
++        buildSongsPanel();
 +        buildTray();
 +        buildEditBar();
++        buildToast();
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> layoutAll());
 +        act.nativeMmSetOverlayActive(true);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
++        handler.post(poll);
 +    }
 +
-+    // Keeps the stock overlay hidden and handles the idle fade.
 +    private final Runnable housekeeping = new Runnable() {
 +        @Override
 +        public void run() {
@@ -182,11 +212,60 @@ index 0000000..a25aaa1
 +            boolean idle = !editing && System.currentTimeMillis() - lastTouch > IDLE_FADE_MS;
 +            float target = controlsHidden ? 0f : (idle ? opacity * 0.3f : opacity);
 +            for (Ctl c : ctls) {
-+                if (c.view != null && Math.abs(c.view.getAlpha() - target) > 0.01f && !(editing && c.hidden)) {
-+                    c.view.animate().alpha(target).setDuration(250).start();
-+                }
++                if (c.view == null || c.kind == KIND_PANEL || c.kind == KIND_SKIP || (editing && c.hidden)) continue;
++                float t = (c.kind == KIND_TRAY) ? Math.max(target, 0.35f) : target; // keep "..." findable
++                if (Math.abs(c.view.getAlpha() - t) > 0.01f) c.view.animate().alpha(t).setDuration(250).start();
 +            }
 +            handler.postDelayed(this, 300);
++        }
++    };
++
++    // Reads game state from MMTouch.cpp and updates the panels.
++    private final Runnable poll = new Runnable() {
++        @Override
++        public void run() {
++            long s = act.nativeMmGetState();
++            int frame = (int) (s >>> 32);
++            long now = System.currentTimeMillis();
++            if (frame != lastFrame) {
++                lastFrame = frame;
++                lastFrameChange = now;
++            }
++            // No game updates for a while (title screen, file select, loading): treat as no gameplay.
++            stateBits = (now - lastFrameChange > 600) ? 0 : (int) (s & 0xFFFF);
++
++            setSprintUi((stateBits & ST_SPRINT) != 0);
++            if (trailItem != null) trailItem.setText((stateBits & ST_TRAIL) != 0 ? "Trail: on" : "Trail: off");
++
++            boolean showSkip = editing || (((stateBits & ST_CAN_SKIP) != 0) && !controlsHidden);
++            skipCtl.view.setVisibility((showSkip && (!skipCtl.hidden || editing)) ? View.VISIBLE : View.GONE);
++
++            String q = act.nativeMmGetQuest();
++            if (q != null && !q.equals(lastQuest)) {
++                lastQuest = q;
++                String[] parts = q.split("\n", 3);
++                questWhere.setText(parts.length > 0 ? parts[0] : "");
++                questTitle.setText(parts.length > 1 ? parts[1] : "");
++                questText.setText(parts.length > 2 ? parts[2] : "");
++            }
++            boolean showQuest = editing || (questPanelOn && !questCtl.hidden && ((stateBits & ST_SHOW_QUEST) != 0)
++                    && !lastQuest.isEmpty());
++            questCtl.view.setVisibility(showQuest ? View.VISIBLE : View.GONE);
++
++            boolean showSongs = !editing && ((stateBits & ST_OCARINA) != 0);
++            if (showSongs) {
++                String songs = act.nativeMmGetSongs();
++                if (songs != null && !songs.equals(lastSongs)) {
++                    lastSongs = songs;
++                    rebuildSongs(songs);
++                }
++            }
++            songsPanel.setVisibility(showSongs ? View.VISIBLE : View.GONE);
++
++            String msg = act.nativeMmPollMessage();
++            if (msg != null && !msg.isEmpty()) showToast(msg);
++
++            handler.postDelayed(this, 100);
 +        }
 +    };
 +
@@ -194,22 +273,61 @@ index 0000000..a25aaa1
 +        lastTouch = System.currentTimeMillis();
 +    }
 +
++    // ------------------------------------------------------------------ styling
++    private GradientDrawable discDrawable(int fill, int stroke, int strokeDp) {
++        GradientDrawable d = new GradientDrawable();
++        d.setShape(GradientDrawable.OVAL);
++        d.setColor(fill);
++        d.setStroke(dp(strokeDp), stroke);
++        return d;
++    }
++
++    private View disc(int fill, int stroke, int strokeDp) {
++        View v = new View(act);
++        v.setBackground(discDrawable(fill, stroke, strokeDp));
++        return v;
++    }
++
++    private GradientDrawable styleFor(int style, boolean active) {
++        switch (style) {
++            case STYLE_A: return discDrawable(Color.argb(175, 38, 92, 205), Color.rgb(150, 195, 255), 3);
++            case STYLE_B: return discDrawable(Color.argb(175, 36, 140, 64), Color.rgb(160, 230, 165), 3);
++            case STYLE_C: return discDrawable(Color.argb(175, 214, 168, 24), Color.rgb(255, 232, 130), 3);
++            case STYLE_START: return discDrawable(Color.argb(175, 178, 40, 40), Color.rgb(255, 160, 150), 2);
++            default:
++                return discDrawable(active ? Color.argb(185, 200, 140, 40) : Color.argb(150, 18, 16, 28),
++                        active ? Color.rgb(255, 220, 140) : GOLD_SOFT, 2);
++        }
++    }
++
++    private TextView hudText(float sp) {
++        TextView t = new TextView(act);
++        t.setTextColor(Color.WHITE);
++        t.setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD));
++        t.setShadowLayer(5f, 0f, 2f, Color.BLACK);
++        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        return t;
++    }
++
++    private GradientDrawable panelDrawable() {
++        GradientDrawable bg = new GradientDrawable();
++        bg.setColor(PANEL_BG);
++        bg.setCornerRadius(dp(12));
++        bg.setStroke(dp(2), GOLD_SOFT);
++        return bg;
++    }
++
 +    // ------------------------------------------------------------------ building views
 +    private void buildCtl(Ctl c) {
 +        FrameLayout v = new FrameLayout(act);
-+        GradientDrawable bg = new GradientDrawable();
-+        bg.setShape(GradientDrawable.OVAL);
-+        bg.setColor(Color.argb(40, 255, 255, 255));
-+        int edge = Color.argb(150, 255, 255, 255);
-+        if (c.mask == N64_A) edge = Color.rgb(77, 139, 232);
-+        if (c.mask == N64_B) edge = Color.rgb(76, 175, 106);
-+        if ((c.mask & (N64_CLEFT | N64_CDOWN | N64_CRIGHT)) != 0) edge = Color.rgb(232, 194, 61);
-+        bg.setStroke(dp(2), edge);
-+        v.setBackground(bg);
-+
-+        TextView t = new TextView(act);
-+        t.setTextColor(Color.WHITE);
-+        t.setTypeface(Typeface.DEFAULT_BOLD);
++        if (c.kind == KIND_SKIP) {
++            GradientDrawable bg = panelDrawable();
++            bg.setCornerRadius(dp(40));
++            v.setBackground(bg);
++        } else {
++            v.setBackground(styleFor(c.style, false));
++        }
++        TextView t = hudText(14);
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -219,43 +337,129 @@ index 0000000..a25aaa1
 +        root.addView(v);
 +    }
 +
++    private void buildQuestPanel(Ctl c) {
++        LinearLayout p = new LinearLayout(act);
++        p.setOrientation(LinearLayout.VERTICAL);
++        p.setPadding(dp(14), dp(9), dp(14), dp(10));
++        p.setBackground(panelDrawable());
++        questWhere = new TextView(act);
++        questWhere.setTextColor(GOLD);
++        questWhere.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        questTitle = new TextView(act);
++        questTitle.setTextColor(Color.WHITE);
++        questTitle.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        questTitle.setShadowLayer(4f, 0f, 1.5f, Color.BLACK);
++        questText = new TextView(act);
++        questText.setTextColor(Color.argb(225, 245, 240, 225));
++        p.addView(questWhere);
++        p.addView(questTitle);
++        p.addView(questText);
++        c.view = p;
++        p.setOnTouchListener((view, e) -> editing ? onCtlEdit(c, e) : false);
++        root.addView(p);
++    }
++
++    private void buildSongsPanel() {
++        songsPanel = new LinearLayout(act);
++        songsPanel.setOrientation(LinearLayout.VERTICAL);
++        songsPanel.setPadding(dp(10), dp(8), dp(10), dp(10));
++        songsPanel.setBackground(panelDrawable());
++        TextView title = new TextView(act);
++        title.setText("Songs");
++        title.setTextColor(GOLD);
++        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        title.setPadding(dp(6), 0, 0, dp(4));
++        songsPanel.addView(title);
++        songsList = new LinearLayout(act);
++        songsList.setOrientation(LinearLayout.VERTICAL);
++        songsPanel.addView(songsList);
++        TextView hint = new TextView(act);
++        hint.setText("Tap a song to play it");
++        hint.setTextColor(Color.argb(170, 255, 255, 255));
++        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
++        hint.setPadding(dp(6), dp(4), 0, 0);
++        songsPanel.addView(hint);
++        songsPanel.setVisibility(View.GONE);
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
++        lp.rightMargin = dp(24);
++        root.addView(songsPanel, lp);
++    }
++
++    private void rebuildSongs(String songs) {
++        songsList.removeAllViews();
++        for (String line : songs.split("\n")) {
++            int colon = line.indexOf(':');
++            if (colon <= 0) continue;
++            final int idx = Integer.parseInt(line.substring(0, colon));
++            TextView row = new TextView(act);
++            row.setText(line.substring(colon + 1));
++            row.setTextColor(Color.WHITE);
++            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++            row.setTypeface(Typeface.DEFAULT_BOLD);
++            row.setPadding(dp(8), dp(7), dp(8), dp(7));
++            row.setOnClickListener(v -> {
++                touched();
++                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                act.nativeMmPlaySong(idx);
++            });
++            songsList.addView(row);
++        }
++    }
++
 +    private void buildTray() {
 +        tray = new LinearLayout(act);
-+        tray.setOrientation(LinearLayout.HORIZONTAL);
++        tray.setOrientation(LinearLayout.VERTICAL);
 +        tray.setPadding(dp(8), dp(6), dp(8), dp(6));
-+        GradientDrawable bg = new GradientDrawable();
-+        bg.setColor(Color.argb(200, 14, 10, 26));
-+        bg.setCornerRadius(dp(14));
-+        bg.setStroke(dp(1), Color.argb(90, 246, 231, 161));
-+        tray.setBackground(bg);
++        tray.setBackground(panelDrawable());
 +        tray.setVisibility(View.GONE);
 +
-+        tray.addView(trayButton("Pause", v -> tapN64(N64_START)));
-+        tray.addView(trayButton("Tatl", v -> tapN64(N64_CUP)));
-+        tray.addView(trayButton("Minimap", v -> tapN64(N64_L)));
-+        tray.addView(trayButton("2 Ship menu", v -> { act.nativeGamepadBackPressed(); }));
-+        tray.addView(trayButton("Edit controls", v -> setEditing(true)));
-+        tray.addView(trayButton("Hide controls", v -> {
++        LinearLayout row1 = new LinearLayout(act);
++        LinearLayout row2 = new LinearLayout(act);
++        row1.addView(trayItem("Map", v -> act.nativeMmAction(ACT_MAP), true));
++        row1.addView(trayItem("Quick save", v -> act.nativeMmAction(ACT_QUICKSAVE), true));
++        row1.addView(trayItem("Quick load", v -> act.nativeMmAction(ACT_QUICKLOAD), true));
++        trailItem = trayItem("Trail: on", v -> act.nativeMmAction(ACT_TRAIL), false);
++        row1.addView(trailItem);
++        questItem = trayItem(questPanelOn ? "Quest: on" : "Quest: off", v -> {
++            questPanelOn = !questPanelOn;
++            prefs.edit().putBoolean("questPanel", questPanelOn).apply();
++            ((TextView) v).setText(questPanelOn ? "Quest: on" : "Quest: off");
++        }, false);
++        row1.addView(questItem);
++        row1.addView(trayItem("Pause", v -> tapN64(N64_START), true));
++
++        row2.addView(trayItem("Tatl", v -> tapN64(N64_CUP), true));
++        row2.addView(trayItem("Minimap", v -> tapN64(N64_L), true));
++        row2.addView(trayItem("2 Ship menu", v -> act.nativeGamepadBackPressed(), true));
++        row2.addView(trayItem("Edit controls", v -> setEditing(true), true));
++        row2.addView(trayItem("Hide controls", v -> {
 +            controlsHidden = !controlsHidden;
 +            ((TextView) v).setText(controlsHidden ? "Show controls" : "Hide controls");
-+        }));
++        }, false));
++        tray.addView(row1);
++        tray.addView(row2);
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
 +        lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-+        lp.topMargin = dp(56);
++        lp.topMargin = dp(52);
 +        root.addView(tray, lp);
 +    }
 +
-+    private TextView trayButton(String label, View.OnClickListener onClick) {
++    private TextView trayItem(String label, View.OnClickListener onClick, boolean closesTray) {
 +        TextView b = new TextView(act);
 +        b.setText(label);
 +        b.setTextColor(Color.WHITE);
++        b.setTypeface(Typeface.DEFAULT_BOLD);
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-+        b.setPadding(dp(12), dp(9), dp(12), dp(9));
++        b.setPadding(dp(13), dp(10), dp(13), dp(10));
 +        b.setOnClickListener(v -> {
 +            touched();
++            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
 +            onClick.onClick(v);
-+            if (!label.startsWith("Hide") && !label.startsWith("Show")) tray.setVisibility(View.GONE);
++            if (closesTray) tray.setVisibility(View.GONE);
 +        });
 +        return b;
 +    }
@@ -264,11 +468,7 @@ index 0000000..a25aaa1
 +        editBar = new LinearLayout(act);
 +        editBar.setOrientation(LinearLayout.HORIZONTAL);
 +        editBar.setPadding(dp(8), dp(6), dp(8), dp(6));
-+        GradientDrawable bg = new GradientDrawable();
-+        bg.setColor(Color.argb(220, 14, 10, 26));
-+        bg.setCornerRadius(dp(14));
-+        bg.setStroke(dp(1), Color.argb(140, 63, 182, 168));
-+        editBar.setBackground(bg);
++        editBar.setBackground(panelDrawable());
 +        editBar.setVisibility(View.GONE);
 +
 +        editBar.addView(editButton("Done", v -> setEditing(false)));
@@ -295,7 +495,7 @@ index 0000000..a25aaa1
 +    private TextView editButton(String label, View.OnClickListener onClick) {
 +        TextView b = new TextView(act);
 +        b.setText(label);
-+        b.setTextColor(Color.WHITE);
++        b.setTextColor(GOLD);
 +        b.setTypeface(Typeface.DEFAULT_BOLD);
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
 +        b.setPadding(dp(10), dp(9), dp(10), dp(9));
@@ -303,14 +503,27 @@ index 0000000..a25aaa1
 +        return b;
 +    }
 +
-+    private View circle(int fill, int stroke) {
-+        View v = new View(act);
-+        GradientDrawable d = new GradientDrawable();
-+        d.setShape(GradientDrawable.OVAL);
-+        d.setColor(fill);
-+        d.setStroke(dp(2), stroke);
-+        v.setBackground(d);
-+        return v;
++    private void buildToast() {
++        toast = hudText(15);
++        toast.setTypeface(Typeface.DEFAULT_BOLD);
++        toast.setPadding(dp(16), dp(9), dp(16), dp(9));
++        GradientDrawable bg = panelDrawable();
++        bg.setCornerRadius(dp(22));
++        toast.setBackground(bg);
++        toast.setVisibility(View.GONE);
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
++        lp.bottomMargin = dp(90);
++        root.addView(toast, lp);
++    }
++
++    private final Runnable hideToast = () -> toast.setVisibility(View.GONE);
++
++    private void showToast(String msg) {
++        toast.setText(msg);
++        toast.setVisibility(View.VISIBLE);
++        handler.removeCallbacks(hideToast);
++        handler.postDelayed(hideToast, 2000);
 +    }
 +
 +    // ------------------------------------------------------------------ layout
@@ -323,14 +536,31 @@ index 0000000..a25aaa1
 +        stickZone.setLayoutParams(sz);
 +
 +        for (Ctl c : ctls) {
++            if (c.kind == KIND_PANEL) {
++                int pw = dp(c.size);
++                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(pw, ViewGroup.LayoutParams.WRAP_CONTENT);
++                lp.leftMargin = (int) (c.x * w - pw / 2f);
++                lp.topMargin = (int) (c.y * h);
++                c.view.setLayoutParams(lp);
++                float k = c.size / 360f;
++                questWhere.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12 * k);
++                questTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17 * k);
++                questText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13 * k);
++                if (editing) c.view.setAlpha(c.hidden ? 0.35f : 1f);
++                continue;
++            }
 +            int px = dp(c.size);
-+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(px, px);
-+            lp.leftMargin = (int) (c.x * w - px / 2f);
++            int pw = c.kind == KIND_SKIP ? (int) (px * 2.2f) : px;
++            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(pw, px);
++            lp.leftMargin = (int) (c.x * w - pw / 2f);
 +            lp.topMargin = (int) (c.y * h - px / 2f);
 +            c.view.setLayoutParams(lp);
-+            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * (c.sub.isEmpty() ? 0.42f : 0.22f));
-+            boolean show = !c.hidden || editing;
-+            c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++            float ratio = c.kind == KIND_SKIP ? 0.30f : (c.sub.isEmpty() ? (c.style == STYLE_C ? 0.36f : 0.42f) : 0.24f);
++            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
++            if (c.kind != KIND_SKIP) {
++                boolean show = !c.hidden || editing;
++                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++            }
 +            if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
 +        }
 +    }
@@ -381,8 +611,10 @@ index 0000000..a25aaa1
 +        if (on) {
 +            controlsHidden = false;
 +            releaseAll();
++            for (Ctl c : ctls) c.view.setVisibility(View.VISIBLE);
 +        } else {
 +            saveAll();
++            for (Ctl c : ctls) c.view.setAlpha(1f);
 +        }
 +        layoutAll();
 +        touched();
@@ -396,7 +628,7 @@ index 0000000..a25aaa1
 +
 +    private void releaseAll() {
 +        for (Ctl c : ctls) {
-+            if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.mask, false);
++            if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
 +        }
 +        act.setAxis(ControllerButtons.AXIS_LX, (short) 0);
 +        act.setAxis(ControllerButtons.AXIS_LY, (short) 0);
@@ -408,45 +640,44 @@ index 0000000..a25aaa1
 +        c.view.animate().scaleX(pressed ? 0.92f : 1f).scaleY(pressed ? 0.92f : 1f).setDuration(60).start();
 +    }
 +
++    private boolean sprintUiOn = false;
++
++    private void setSprintUi(boolean on) {
++        if (on == sprintUiOn || sprintCtl.view == null) return;
++        sprintUiOn = on;
++        sprintCtl.view.setBackground(styleFor(STYLE_PLAIN, on));
++    }
++
 +    private boolean onCtlTouch(Ctl c, MotionEvent e) {
 +        touched();
 +        if (editing) return onCtlEdit(c, e);
-+        if (controlsHidden) return false;
++        if (controlsHidden && c.kind != KIND_TRAY) return false;
 +
 +        switch (e.getActionMasked()) {
 +            case MotionEvent.ACTION_DOWN:
 +                setPressed(c, true);
-+                c.view.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
++                c.view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
 +                switch (c.kind) {
-+                    case KIND_N64: act.nativeMmSetN64Button(c.mask, true); break;
-+                    case KIND_JUMP: act.nativeMmAction(1); break;
-+                    case KIND_SPRINT: setSprintUi(act.nativeMmAction(2)); break;
++                    case KIND_N64: act.nativeMmSetN64Button(c.value, true); break;
++                    case KIND_ACTION:
++                    case KIND_SKIP: act.nativeMmAction(c.value); break;
 +                    case KIND_TRAY: tray.setVisibility(tray.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE); break;
 +                }
 +                return true;
 +            case MotionEvent.ACTION_UP:
 +            case MotionEvent.ACTION_CANCEL:
 +                setPressed(c, false);
-+                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.mask, false);
++                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
 +                return true;
 +        }
 +        return true;
-+    }
-+
-+    private void setSprintUi(boolean on) {
-+        sprintOn = on;
-+        for (Ctl c : ctls) {
-+            if (c.kind == KIND_SPRINT) {
-+                GradientDrawable bg = (GradientDrawable) c.view.getBackground();
-+                bg.setColor(on ? Color.argb(120, 232, 163, 61) : Color.argb(40, 255, 255, 255));
-+            }
-+        }
 +    }
 +
 +    private long lastEditTap = 0;
 +
 +    private boolean onCtlEdit(Ctl c, MotionEvent e) {
 +        int w = root.getWidth(), h = root.getHeight();
++        float anchorY = c.kind == KIND_PANEL ? c.y * h : c.y * h;
 +        switch (e.getActionMasked()) {
 +            case MotionEvent.ACTION_DOWN: {
 +                long now = System.currentTimeMillis();
@@ -456,7 +687,7 @@ index 0000000..a25aaa1
 +                }
 +                lastEditTap = now;
 +                c.dragDx = e.getRawX() - c.x * w;
-+                c.dragDy = e.getRawY() - c.y * h;
++                c.dragDy = e.getRawY() - anchorY;
 +                return true;
 +            }
 +            case MotionEvent.ACTION_POINTER_DOWN:
@@ -468,7 +699,8 @@ index 0000000..a25aaa1
 +            case MotionEvent.ACTION_MOVE:
 +                if (e.getPointerCount() >= 2 && c.pinchStartDist > 0) {
 +                    float scale = spacing(e) / c.pinchStartDist;
-+                    c.size = Math.max(36f, Math.min(160f, c.pinchStartSize * scale));
++                    float min = c.kind == KIND_PANEL ? 220f : 36f, max = c.kind == KIND_PANEL ? 640f : 160f;
++                    c.size = Math.max(min, Math.min(max, c.pinchStartSize * scale));
 +                } else if (e.getPointerCount() == 1) {
 +                    c.x = clamp((e.getRawX() - c.dragDx) / w);
 +                    c.y = clamp((e.getRawY() - c.dragDy) / h);
@@ -488,10 +720,10 @@ index 0000000..a25aaa1
 +    }
 +
 +    private static float clamp(float v) {
-+        return Math.max(0.02f, Math.min(0.98f, v));
++        return Math.max(0.0f, Math.min(0.98f, v));
 +    }
 +
-+    // Floating movement stick: appears under the thumb. Double-tap toggles sprint.
++    // Floating movement stick. Double-tap toggles sprint.
 +    private boolean onStickTouch(View v, MotionEvent e) {
 +        touched();
 +        if (editing || controlsHidden) return false;
@@ -504,9 +736,10 @@ index 0000000..a25aaa1
 +                    stickX0 = e.getX(idx);
 +                    stickY0 = e.getY(idx);
 +                    long now = System.currentTimeMillis();
-+                    if (now - lastStickDown < 300) setSprintUi(act.nativeMmAction(2));
++                    if (now - lastStickDown < 300) act.nativeMmAction(ACT_SPRINT);
 +                    lastStickDown = now;
 +                    placeStick(stickX0, stickY0, stickX0, stickY0);
++                    if (tray.getVisibility() == View.VISIBLE) tray.setVisibility(View.GONE);
 +                }
 +                return true;
 +            case MotionEvent.ACTION_MOVE: {
@@ -546,7 +779,7 @@ index 0000000..a25aaa1
 +        stickKnob.setY(ky - dp(28));
 +    }
 +
-+    // Camera: drag on the right side (works like holding the right stick away from centre).
++    // Camera: drag on the right side.
 +    private boolean onCamTouch(View v, MotionEvent e) {
 +        touched();
 +        if (editing || controlsHidden) return false;
@@ -588,54 +821,1337 @@ index 0000000..a25aaa1
 +        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, act.getResources().getDisplayMetrics()));
 +    }
 +}
+diff --git a/mm/2s2h/Enhancements/Touch/MMExitGraph.c b/mm/2s2h/Enhancements/Touch/MMExitGraph.c
+new file mode 100644
+index 0000000..b9e2c10
+--- /dev/null
++++ b/mm/2s2h/Enhancements/Touch/MMExitGraph.c
+@@ -0,0 +1,613 @@
++// Generated from the user's own ROM by gen.py: scene exit graph (scene ids and coordinates only).
++#include "MMQuestData.h"
++
++const ExitPoint gExitPoints[] = {
++    { 0x0A, 3696, 302, -986 }, // SCENE_20SICHITAI2 -> SCENE_WITCH_SHOP
++    { 0x27, -1006, 12, 1896 }, // SCENE_20SICHITAI2 -> SCENE_KINSTA1
++    { 0x2B, -1762, 255, 1165 }, // SCENE_20SICHITAI2 -> SCENE_22DEKUCITY
++    { 0x2B, -938, 62, 4176 }, // SCENE_20SICHITAI2 -> SCENE_22DEKUCITY
++    { 0x40, 54, 61, -1661 }, // SCENE_20SICHITAI2 -> SCENE_24KEMONOMITI
++    { 0x46, 290, 393, 3097 }, // SCENE_20SICHITAI2 -> SCENE_21MITURINMAE
++    { 0x57, -50, 170, 112 }, // SCENE_20SICHITAI2 -> SCENE_MAP_SHOP
++    { 0x64, 3740, 27, -2296 }, // SCENE_20SICHITAI2 -> SCENE_26SARUNOMORI
++    { 0x45, 4, 0, 237 }, // SCENE_WITCH_SHOP -> SCENE_20SICHITAI
++    { 0x43, -59, 8, -55 }, // SCENE_HAKASHITA -> SCENE_BOTI
++    { 0x43, -130, 8, 374 }, // SCENE_HAKASHITA -> SCENE_BOTI
++    { 0x6D, 0, 0, 322 }, // SCENE_AYASHIISHOP -> SCENE_ICHIBA
++    { 0x70, -264, -96, -770 }, // SCENE_AYASHIISHOP -> SCENE_ALLEY
++    { 0x35, -301, 0, 261 }, // SCENE_OMOYA -> SCENE_F01
++    { 0x35, 1079, 0, 261 }, // SCENE_OMOYA -> SCENE_F01
++    { 0x6C, 0, 0, 392 }, // SCENE_BOWLING -> SCENE_TOWN
++    { 0x6C, 0, 0, 420 }, // SCENE_SONCHONOIE -> SCENE_TOWN
++    { 0x1D, 877, 200, 1685 }, // SCENE_IKANA -> SCENE_CASTLE
++    { 0x26, 678, 388, 796 }, // SCENE_IKANA -> SCENE_YOUSEI_IZUMI
++    { 0x45, 2791, -640, 5310 }, // SCENE_IKANA -> SCENE_20SICHITAI
++    { 0x4B, -1398, 130, 1584 }, // SCENE_IKANA -> SCENE_REDEAD
++    { 0x4F, 1981, -160, 4709 }, // SCENE_IKANA -> SCENE_SECOM
++    { 0x51, -1126, 642, -20 }, // SCENE_IKANA -> SCENE_TOUGITES
++    { 0x53, -20, -374, 5089 }, // SCENE_IKANA -> SCENE_IKANAMAE
++    { 0x53, -222, -416, 5428 }, // SCENE_IKANA -> SCENE_IKANAMAE
++    { 0x55, -354, 440, 912 }, // SCENE_IKANA -> SCENE_MUSICHOUSE
++    { 0x58, 1511, 856, -330 }, // SCENE_IKANA -> SCENE_F40
++    { 0x60, -3386, -505, 2644 }, // SCENE_IKANA -> SCENE_RANDOM
++    { 0x23, 2740, 280, -1155 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 2385, 160, -680 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 200, 80, -945 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 2450, 413, 101 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 2510, 280, -143 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 1820, 55, 1500 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 640, 80, -1420 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x23, 860, 55, 1520 }, // SCENE_KAIZOKU -> SCENE_PIRATE
++    { 0x3B, -280, 55, 1220 }, // SCENE_KAIZOKU -> SCENE_TORIDE
++    { 0x3B, 462, -140, -1178 }, // SCENE_KAIZOKU -> SCENE_TORIDE
++    { 0x6C, -200, 152, 470 }, // SCENE_MILK_BAR -> SCENE_TOWN
++    { 0x58, 0, 90, 1012 }, // SCENE_INISIE_N -> SCENE_F40
++    { 0x6C, -70, 0, 60 }, // SCENE_TAKARAYA -> SCENE_TOWN
++    { 0x36, 56, -1012, -3556 }, // SCENE_INISIE_R -> SCENE_INISIE_BS
++    { 0x36, 120, -1012, -3300 }, // SCENE_INISIE_R -> SCENE_INISIE_BS
++    { 0x36, -169, -1012, -3420 }, // SCENE_INISIE_R -> SCENE_INISIE_BS
++    { 0x36, -70, -1012, -3251 }, // SCENE_INISIE_R -> SCENE_INISIE_BS
++    { 0x59, 0, -210, 1012 }, // SCENE_INISIE_R -> SCENE_F41
++    { 0x63, 1590, 0, 360 }, // SCENE_OPENINGDAN -> SCENE_INSIDETOWER
++    { 0x1F, 0, -1121, -2328 }, // SCENE_MITURIN -> SCENE_MITURIN_BS
++    { 0x46, 0, -1185, 2640 }, // SCENE_MITURIN -> SCENE_21MITURINMAE
++    { 0x46, -2000, 0, 720 }, // SCENE_MITURIN -> SCENE_21MITURINMAE
++    { 0x2D, 1346, -1090, 7994 }, // SCENE_13HUBUKINOMITI -> SCENE_00KEIKOKU
++    { 0x2D, 1222, -1128, 8253 }, // SCENE_13HUBUKINOMITI -> SCENE_00KEIKOKU
++    { 0x50, -212, -202, 3738 }, // SCENE_13HUBUKINOMITI -> SCENE_10YUKIYAMANOMURA
++    { 0x50, -382, -174, 3482 }, // SCENE_13HUBUKINOMITI -> SCENE_10YUKIYAMANOMURA
++    { 0x50, -192, -152, 3286 }, // SCENE_13HUBUKINOMITI -> SCENE_10YUKIYAMANOMURA
++    { 0x13, -1245, 0, -2250 }, // SCENE_CASTLE -> SCENE_IKANA
++    { 0x4B, 1494, -667, -2655 }, // SCENE_CASTLE -> SCENE_REDEAD
++    { 0x56, 360, -1370, -1680 }, // SCENE_CASTLE -> SCENE_IKNINSIDE
++    { 0x6C, -10, 0, 453 }, // SCENE_SYATEKI_MIZU -> SCENE_TOWN
++    { 0x44, 0, 2120, -813 }, // SCENE_HAKUGIN -> SCENE_HAKUGIN_BS
++    { 0x5C, 2, 0, 2188 }, // SCENE_HAKUGIN -> SCENE_12HAKUGINMAE
++    { 0x2D, -2673, 0, 1474 }, // SCENE_ROMANYMAE -> SCENE_00KEIKOKU
++    { 0x35, -6282, 69, 1150 }, // SCENE_ROMANYMAE -> SCENE_F01
++    { 0x6A, -5022, 0, 1982 }, // SCENE_ROMANYMAE -> SCENE_KOEPONARACE
++    { 0x6A, -3651, 0, 1933 }, // SCENE_ROMANYMAE -> SCENE_KOEPONARACE
++    { 0x14, 3550, 940, -470 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 3030, 740, -880 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 3520, 40, 760 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 710, 160, -2135 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 3175, 240, -1780 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 4770, 320, -3225 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 1380, 0, 1490 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x14, 2600, 160, -2970 }, // SCENE_PIRATE -> SCENE_KAIZOKU
++    { 0x3B, 2520, 200, 785 }, // SCENE_PIRATE -> SCENE_TORIDE
++    { 0x3B, 1780, -580, -160 }, // SCENE_PIRATE -> SCENE_TORIDE
++    { 0x3B, 995, -520, -340 }, // SCENE_PIRATE -> SCENE_TORIDE
++    { 0x3B, -670, -1020, 2060 }, // SCENE_PIRATE -> SCENE_TORIDE
++    { 0x40, -1, 0, 461 }, // SCENE_SYATEKI_MORI -> SCENE_24KEMONOMITI
++    { 0x37, 7413, 392, 171 }, // SCENE_SINKAI -> SCENE_30GYOSON
++    { 0x37, 7413, 392, -171 }, // SCENE_SINKAI -> SCENE_30GYOSON
++    { 0x45, 0, 120, 510 }, // SCENE_KINSTA1 -> SCENE_20SICHITAI
++    { 0x37, 0, 540, 740 }, // SCENE_KINDAN2 -> SCENE_30GYOSON
++    { 0x2D, -7, -129, 237 }, // SCENE_TENMON_DAI -> SCENE_00KEIKOKU
++    { 0x6C, 600, -460, 4240 }, // SCENE_TENMON_DAI -> SCENE_TOWN
++    { 0x3E, 6, 0, 1298 }, // SCENE_22DEKUCITY -> SCENE_DEKU_KING
++    { 0x3E, -200, 320, 1056 }, // SCENE_22DEKUCITY -> SCENE_DEKU_KING
++    { 0x45, -6, 0, 3366 }, // SCENE_22DEKUCITY -> SCENE_20SICHITAI
++    { 0x45, 828, 161, 3020 }, // SCENE_22DEKUCITY -> SCENE_20SICHITAI
++    { 0x52, -1832, 0, 333 }, // SCENE_22DEKUCITY -> SCENE_DANPEI
++    { 0x50, 0, -15, 404 }, // SCENE_KAJIYA -> SCENE_10YUKIYAMANOMURA
++    { 0x1C, -496, 379, -5668 }, // SCENE_00KEIKOKU -> SCENE_13HUBUKINOMITI
++    { 0x1C, -106, 490, -5790 }, // SCENE_00KEIKOKU -> SCENE_13HUBUKINOMITI
++    { 0x22, -4009, -222, 4350 }, // SCENE_00KEIKOKU -> SCENE_ROMANYMAE
++    { 0x22, -4106, -222, 4131 }, // SCENE_00KEIKOKU -> SCENE_ROMANYMAE
++    { 0x29, 3914, 279, 1458 }, // SCENE_00KEIKOKU -> SCENE_TENMON_DAI
++    { 0x37, -7032, -406, -733 }, // SCENE_00KEIKOKU -> SCENE_30GYOSON
++    { 0x40, -436, -222, 5984 }, // SCENE_00KEIKOKU -> SCENE_24KEMONOMITI
++    { 0x53, 4890, -2, -848 }, // SCENE_00KEIKOKU -> SCENE_IKANAMAE
++    { 0x6C, 1400, 68, -400 }, // SCENE_00KEIKOKU -> SCENE_TOWN
++    { 0x6D, -2180, 68, -400 }, // SCENE_00KEIKOKU -> SCENE_ICHIBA
++    { 0x6E, -400, 68, -2200 }, // SCENE_00KEIKOKU -> SCENE_BACKTOWN
++    { 0x6F, -400, -77, 1400 }, // SCENE_00KEIKOKU -> SCENE_CLOCKTOWER
++    { 0x6D, -10, 0, 346 }, // SCENE_POSTHOUSE -> SCENE_ICHIBA
++    { 0x37, 392, 0, 0 }, // SCENE_LABO -> SCENE_30GYOSON
++    { 0x43, 0, 440, -430 }, // SCENE_DANPEI2TEST -> SCENE_BOTI
++    { 0x3D, 533, -538, 450 }, // SCENE_16GORON_HOUSE -> SCENE_GORONSHOP
++    { 0x4D, 650, -217, -954 }, // SCENE_16GORON_HOUSE -> SCENE_11GORONNOSATO
++    { 0x38, 1450, 52, 508 }, // SCENE_33ZORACITY -> SCENE_31MISAKI
++    { 0x38, -2220, -505, 2220 }, // SCENE_33ZORACITY -> SCENE_31MISAKI
++    { 0x4C, 1132, 0, 908 }, // SCENE_33ZORACITY -> SCENE_BANDROOM
++    { 0x4C, -222, 0, -952 }, // SCENE_33ZORACITY -> SCENE_BANDROOM
++    { 0x4C, -687, 0, -695 }, // SCENE_33ZORACITY -> SCENE_BANDROOM
++    { 0x4C, 928, 0, -314 }, // SCENE_33ZORACITY -> SCENE_BANDROOM
++    { 0x4C, 958, 0, 199 }, // SCENE_33ZORACITY -> SCENE_BANDROOM
++    { 0x6D, 0, 15, 300 }, // SCENE_8ITEMSHOP -> SCENE_ICHIBA
++    { 0x10, -546, 264, -1690 }, // SCENE_F01 -> SCENE_OMOYA
++    { 0x10, -1194, 255, -1540 }, // SCENE_F01 -> SCENE_OMOYA
++    { 0x22, 3193, 200, 501 }, // SCENE_F01 -> SCENE_ROMANYMAE
++    { 0x22, 3413, 96, 658 }, // SCENE_F01 -> SCENE_ROMANYMAE
++    { 0x22, 3415, -20, 918 }, // SCENE_F01 -> SCENE_ROMANYMAE
++    { 0x22, 3280, -20, 1044 }, // SCENE_F01 -> SCENE_ROMANYMAE
++    { 0x41, -3257, 167, 810 }, // SCENE_F01 -> SCENE_F01_B
++    { 0x42, -3443, 172, -126 }, // SCENE_F01 -> SCENE_F01C
++    { 0x25, -5834, -364, -376 }, // SCENE_30GYOSON -> SCENE_SINKAI
++    { 0x25, -5700, -354, -119 }, // SCENE_30GYOSON -> SCENE_SINKAI
++    { 0x25, -5958, -386, 296 }, // SCENE_30GYOSON -> SCENE_SINKAI
++    { 0x25, -5426, -329, 63 }, // SCENE_30GYOSON -> SCENE_SINKAI
++    { 0x28, 1602, 92, 4166 }, // SCENE_30GYOSON -> SCENE_KINDAN2
++    { 0x2D, 3855, 80, 4509 }, // SCENE_30GYOSON -> SCENE_00KEIKOKU
++    { 0x2D, 4182, 80, 4688 }, // SCENE_30GYOSON -> SCENE_00KEIKOKU
++    { 0x2F, -3187, 241, 4080 }, // SCENE_30GYOSON -> SCENE_LABO
++    { 0x38, -298, 33, 6461 }, // SCENE_30GYOSON -> SCENE_31MISAKI
++    { 0x3B, -190, -445, -3286 }, // SCENE_30GYOSON -> SCENE_TORIDE
++    { 0x3C, 1176, 92, 4712 }, // SCENE_30GYOSON -> SCENE_FISHERMAN
++    { 0x26, -1636, 200, 4626 }, // SCENE_31MISAKI -> SCENE_YOUSEI_IZUMI
++    { 0x33, -4281, -307, 1382 }, // SCENE_31MISAKI -> SCENE_33ZORACITY
++    { 0x33, -5190, 14, 1576 }, // SCENE_31MISAKI -> SCENE_33ZORACITY
++    { 0x37, -286, 16, -225 }, // SCENE_31MISAKI -> SCENE_30GYOSON
++    { 0x37, -39, 16, -79 }, // SCENE_31MISAKI -> SCENE_30GYOSON
++    { 0x4A, 4100, 1255, 5162 }, // SCENE_31MISAKI -> SCENE_35TAKI
++    { 0x6D, 0, 0, 420 }, // SCENE_TAKARAKUJI -> SCENE_ICHIBA
++    { 0x14, 407, 200, 1290 }, // SCENE_TORIDE -> SCENE_KAIZOKU
++    { 0x14, 568, 400, -2094 }, // SCENE_TORIDE -> SCENE_KAIZOKU
++    { 0x23, 488, -800, 1543 }, // SCENE_TORIDE -> SCENE_PIRATE
++    { 0x23, 218, 200, -862 }, // SCENE_TORIDE -> SCENE_PIRATE
++    { 0x37, -3184, -246, 2265 }, // SCENE_TORIDE -> SCENE_30GYOSON
++    { 0x37, -3324, -246, 2466 }, // SCENE_TORIDE -> SCENE_30GYOSON
++    { 0x37, 0, 0, 209 }, // SCENE_FISHERMAN -> SCENE_30GYOSON
++    { 0x32, -15, 0, 329 }, // SCENE_GORONSHOP -> SCENE_16GORON_HOUSE
++    { 0x2B, 908, 214, -54 }, // SCENE_DEKU_KING -> SCENE_22DEKUCITY
++    { 0x2B, -8, 0, -655 }, // SCENE_DEKU_KING -> SCENE_22DEKUCITY
++    { 0x24, 3074, -72, 3406 }, // SCENE_24KEMONOMITI -> SCENE_SYATEKI_MORI
++    { 0x2D, 596, -112, -20 }, // SCENE_24KEMONOMITI -> SCENE_00KEIKOKU
++    { 0x45, 211, -237, 4075 }, // SCENE_24KEMONOMITI -> SCENE_20SICHITAI
++    { 0x45, -42, -237, 4229 }, // SCENE_24KEMONOMITI -> SCENE_20SICHITAI
++    { 0x35, -3249, 167, 804 }, // SCENE_F01_B -> SCENE_F01
++    { 0x35, -3396, 172, -110 }, // SCENE_F01C -> SCENE_F01
++    { 0x0C, 235, -94, 426 }, // SCENE_BOTI -> SCENE_HAKASHITA
++    { 0x0C, 238, -58, -80 }, // SCENE_BOTI -> SCENE_HAKASHITA
++    { 0x30, -532, 314, -2223 }, // SCENE_BOTI -> SCENE_DANPEI2TEST
++    { 0x30, -422, -64, -12 }, // SCENE_BOTI -> SCENE_DANPEI2TEST
++    { 0x53, -43, -90, 1445 }, // SCENE_BOTI -> SCENE_IKANAMAE
++    { 0x53, -33, -72, 1199 }, // SCENE_BOTI -> SCENE_IKANAMAE
++    { 0x0A, 3696, 302, -986 }, // SCENE_20SICHITAI -> SCENE_WITCH_SHOP
++    { 0x27, -1006, 12, 1896 }, // SCENE_20SICHITAI -> SCENE_KINSTA1
++    { 0x2B, -1762, 255, 1165 }, // SCENE_20SICHITAI -> SCENE_22DEKUCITY
++    { 0x2B, -938, 38, 4176 }, // SCENE_20SICHITAI -> SCENE_22DEKUCITY
++    { 0x40, 54, 61, -1661 }, // SCENE_20SICHITAI -> SCENE_24KEMONOMITI
++    { 0x46, 290, 393, 3097 }, // SCENE_20SICHITAI -> SCENE_21MITURINMAE
++    { 0x57, -50, 170, 112 }, // SCENE_20SICHITAI -> SCENE_MAP_SHOP
++    { 0x64, 3740, 27, -2290 }, // SCENE_20SICHITAI -> SCENE_26SARUNOMORI
++    { 0x26, 1222, 202, 1856 }, // SCENE_21MITURINMAE -> SCENE_YOUSEI_IZUMI
++    { 0x45, -49, 12, -1616 }, // SCENE_21MITURINMAE -> SCENE_20SICHITAI
++    { 0x32, -927, -200, -116 }, // SCENE_11GORONNOSATO2 -> SCENE_16GORON_HOUSE
++    { 0x5E, -1722, 160, 724 }, // SCENE_11GORONNOSATO2 -> SCENE_17SETUGEN2
++    { 0x5F, -1295, -810, 1745 }, // SCENE_SEA -> SCENE_SEA_BS
++    { 0x5F, -1035, -810, 2025 }, // SCENE_SEA -> SCENE_SEA_BS
++    { 0x5F, -760, -730, 1885 }, // SCENE_SEA -> SCENE_SEA_BS
++    { 0x38, -1045, 12, -7358 }, // SCENE_35TAKI -> SCENE_31MISAKI
++    { 0x13, -150, 0, 600 }, // SCENE_REDEAD -> SCENE_IKANA
++    { 0x1D, 1950, 120, -3465 }, // SCENE_REDEAD -> SCENE_CASTLE
++    { 0x33, -675, 0, 420 }, // SCENE_BANDROOM -> SCENE_33ZORACITY
++    { 0x33, -1400, 85, 620 }, // SCENE_BANDROOM -> SCENE_33ZORACITY
++    { 0x33, -2200, 40, 851 }, // SCENE_BANDROOM -> SCENE_33ZORACITY
++    { 0x33, 255, 15, 750 }, // SCENE_BANDROOM -> SCENE_33ZORACITY
++    { 0x33, 1320, 60, 705 }, // SCENE_BANDROOM -> SCENE_33ZORACITY
++    { 0x07, 2769, -200, -1442 }, // SCENE_11GORONNOSATO -> SCENE_KAKUSIANA
++    { 0x32, -922, -200, -106 }, // SCENE_11GORONNOSATO -> SCENE_16GORON_HOUSE
++    { 0x5D, -1732, 160, 731 }, // SCENE_11GORONNOSATO -> SCENE_17SETUGEN
++    { 0x50, 0, 0, -966 }, // SCENE_GORON_HAKA -> SCENE_10YUKIYAMANOMURA
++    { 0x13, 3, 0, 1088 }, // SCENE_SECOM -> SCENE_IKANA
++    { 0x1C, -326, -144, 2251 }, // SCENE_10YUKIYAMANOMURA -> SCENE_13HUBUKINOMITI
++    { 0x1C, -454, -135, 2378 }, // SCENE_10YUKIYAMANOMURA -> SCENE_13HUBUKINOMITI
++    { 0x2C, 207, 71, 800 }, // SCENE_10YUKIYAMANOMURA -> SCENE_KAJIYA
++    { 0x4E, 533, 1408, -1908 }, // SCENE_10YUKIYAMANOMURA -> SCENE_GORON_HAKA
++    { 0x5B, -1378, 357, -1187 }, // SCENE_10YUKIYAMANOMURA -> SCENE_14YUKIDAMANOMITI
++    { 0x5D, 2360, -5, 1210 }, // SCENE_10YUKIYAMANOMURA -> SCENE_17SETUGEN
++    { 0x13, 0, 0, 1339 }, // SCENE_TOUGITES -> SCENE_IKANA
++    { 0x2B, 1540, -70, 2340 }, // SCENE_DANPEI -> SCENE_22DEKUCITY
++    { 0x13, 5528, 575, -270 }, // SCENE_IKANAMAE -> SCENE_IKANA
++    { 0x13, 5821, 575, -60 }, // SCENE_IKANAMAE -> SCENE_IKANA
++    { 0x2D, -3180, 1, -439 }, // SCENE_IKANAMAE -> SCENE_00KEIKOKU
++    { 0x43, 1752, 408, -2432 }, // SCENE_IKANAMAE -> SCENE_BOTI
++    { 0x43, 1461, 374, -2452 }, // SCENE_IKANAMAE -> SCENE_BOTI
++    { 0x6D, 0, 0, 495 }, // SCENE_DOUJOU -> SCENE_ICHIBA
++    { 0x13, 0, 0, 236 }, // SCENE_MUSICHOUSE -> SCENE_IKANA
++    { 0x1D, 172, 0, 2865 }, // SCENE_IKNINSIDE -> SCENE_CASTLE
++    { 0x45, -10, 0, 206 }, // SCENE_MAP_SHOP -> SCENE_20SICHITAI
++    { 0x13, 4, -3000, 3031 }, // SCENE_F40 -> SCENE_IKANA
++    { 0x16, 8, -480, 1025 }, // SCENE_F40 -> SCENE_INISIE_N
++    { 0x18, 0, 924, 1437 }, // SCENE_F41 -> SCENE_INISIE_R
++    { 0x1C, -215, -165, 2189 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_13HUBUKINOMITI
++    { 0x1C, -345, -164, 2385 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_13HUBUKINOMITI
++    { 0x2C, 187, 71, 800 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_KAJIYA
++    { 0x4E, 522, 1408, -1856 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_GORON_HAKA
++    { 0x5B, -1394, 357, -1184 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_14YUKIDAMANOMITI
++    { 0x5E, 2478, -12, 1269 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_17SETUGEN2
++    { 0x5E, 2245, 2, 1161 }, // SCENE_10YUKIYAMANOMURA2 -> SCENE_17SETUGEN2
++    { 0x50, 194, -216, 2622 }, // SCENE_14YUKIDAMANOMITI -> SCENE_10YUKIYAMANOMURA
++    { 0x5C, -2903, 624, -3620 }, // SCENE_14YUKIDAMANOMITI -> SCENE_12HAKUGINMAE
++    { 0x5C, -3081, 674, -3828 }, // SCENE_14YUKIDAMANOMITI -> SCENE_12HAKUGINMAE
++    { 0x5C, -2780, 667, -3921 }, // SCENE_14YUKIDAMANOMITI -> SCENE_12HAKUGINMAE
++    { 0x5C, -2523, 666, -3738 }, // SCENE_14YUKIDAMANOMITI -> SCENE_12HAKUGINMAE
++    { 0x21, 38, 1393, 718 }, // SCENE_12HAKUGINMAE -> SCENE_HAKUGIN
++    { 0x26, 708, 611, 295 }, // SCENE_12HAKUGINMAE -> SCENE_YOUSEI_IZUMI
++    { 0x5B, -540, 246, 6972 }, // SCENE_12HAKUGINMAE -> SCENE_14YUKIDAMANOMITI
++    { 0x4D, 1753, 348, 278 }, // SCENE_17SETUGEN -> SCENE_11GORONNOSATO
++    { 0x50, -2482, 200, 1189 }, // SCENE_17SETUGEN -> SCENE_10YUKIYAMANOMURA
++    { 0x6B, -872, 560, -1164 }, // SCENE_17SETUGEN -> SCENE_GORONRACE
++    { 0x48, 1753, 348, 278 }, // SCENE_17SETUGEN2 -> SCENE_11GORONNOSATO2
++    { 0x5A, -2482, 200, 1189 }, // SCENE_17SETUGEN2 -> SCENE_10YUKIYAMANOMURA2
++    { 0x6B, -872, 560, -1164 }, // SCENE_17SETUGEN2 -> SCENE_GORONRACE
++    { 0x13, 0, 0, 1845 }, // SCENE_RANDOM -> SCENE_IKANA
++    { 0x6C, 180, 0, 500 }, // SCENE_YADOYA -> SCENE_TOWN
++    { 0x6C, -60, 210, 60 }, // SCENE_YADOYA -> SCENE_TOWN
++    { 0x1A, 11, -296, -2440 }, // SCENE_INSIDETOWER -> SCENE_OPENINGDAN
++    { 0x6F, 0, 45, 358 }, // SCENE_INSIDETOWER -> SCENE_CLOCKTOWER
++    { 0x45, 0, 0, 1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, 374, 0, 880 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, 374, 0, 0 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, 0, 0, -1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, 374, 0, -880 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -880, 0, 1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -880, 0, -1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -2134, 0, 880 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -1760, 0, 1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -2134, 0, 0 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -1760, 0, -1254 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x45, -2134, 0, -880 }, // SCENE_26SARUNOMORI -> SCENE_20SICHITAI
++    { 0x1A, 2540, 190, -49 }, // SCENE_LOST_WOODS -> SCENE_OPENINGDAN
++    { 0x6D, 60, -30, 480 }, // SCENE_BOMYA -> SCENE_ICHIBA
++    { 0x22, -2967, -106, -835 }, // SCENE_KOEPONARACE -> SCENE_ROMANYMAE
++    { 0x22, -3203, -106, -569 }, // SCENE_KOEPONARACE -> SCENE_ROMANYMAE
++    { 0x22, -2343, -109, 4200 }, // SCENE_KOEPONARACE -> SCENE_ROMANYMAE
++    { 0x22, -2168, -113, 4389 }, // SCENE_KOEPONARACE -> SCENE_ROMANYMAE
++    { 0x2D, -2204, 278, 6905 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1992, 476, 7011 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1950, 355, 7505 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1802, 467, 7786 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2370, 271, 6472 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4886, 0, 5583 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4579, 29, 5632 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4356, -4, 5431 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4156, -129, 6113 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3782, -39, 6007 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4094, -94, 6428 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4808, 7, 5842 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4263, -93, 5876 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4529, -59, 5960 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2392, 90, 7111 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2678, 52, 7042 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3129, 119, 6052 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3079, 70, 6453 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2876, 357, 8783 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2669, 270, 8675 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2768, 75, 8416 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2797, -18, 8101 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2252, 349, 8582 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2414, 100, 8306 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2459, 13, 8017 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1929, 333, 8238 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2176, 95, 8080 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3620, -342, 5613 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3573, -302, 6092 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3498, -384, 5839 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3632, -316, 6556 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3480, -179, 6345 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3528, -301, 6959 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3484, -280, 5302 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3674, -270, 5238 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3412, -206, 7364 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3750, -196, 7420 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3730, -258, 7144 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3286, 227, 8608 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3080, 24, 8346 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3762, -76, 7780 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3450, -130, 7673 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3634, 103, 8223 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3355, -37, 8133 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3291, -94, 7862 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3010, -77, 7884 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4722, -46, 5336 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4868, -250, 4884 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4600, -164, 5091 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2150, 98, 7749 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2346, 40, 7564 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2470, 3, 7750 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2615, 142, 6419 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2806, 86, 6598 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2787, 145, 6202 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3857, -39, 6349 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3476, 177, 4123 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3689, 362, 3681 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3600, 543, 3260 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3606, 208, 3950 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3669, 36, 4421 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3686, -19, 4713 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3574, 158, 2855 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3925, 27, 3089 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4301, -114, 3512 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4050, -86, 3318 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3446, 329, 3602 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4661, -61, 3664 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4339, -62, 3939 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4446, -39, 4196 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4617, 11, 4009 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4777, -84, 4163 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4220, 427, 389 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4553, 424, 352 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4426, 438, 100 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3123, 188, 2593 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3434, 406, 2474 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2937, 122, 2324 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2755, 158, 2548 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2546, 209, 2318 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2760, 170, 2128 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2811, 207, 1892 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2463, 306, 1893 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2733, 300, 1610 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3064, 248, 1618 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2842, 315, 1464 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3078, 332, 1334 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3405, 368, 1400 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3609, 402, 1440 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4124, 320, 1552 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3944, 310, 1404 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4669, 390, 1707 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4563, 345, 1471 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4962, 384, 1358 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5140, 470, 1611 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5448, 520, 1264 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5172, 424, 1132 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5214, 440, 802 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5574, 563, 856 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5423, 530, 576 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5181, 474, 435 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5106, 523, 207 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4946, 429, 479 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4747, 494, 55 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3757, 754, -288 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4013, 718, -162 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3734, 717, 44 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3836, 608, 180 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3693, 600, 325 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2836, 261, -488 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2237, 127, -254 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2846, 258, 152 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4574, -216, 4564 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4622, -115, 4356 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4939, -118, 4242 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3687, -129, 4951 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3459, -147, 4868 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -935, 0, -437 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1282, 0, -90 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, 743, 0, -81 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, 603, 0, -290 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, 325, 0, -64 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, 185, 0, -391 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -88, 0, -62 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -222, 0, -409 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -452, 0, -71 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -549, 0, -428 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4145, 878, -428 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3834, 870, -584 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -896, 188, -3363 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1124, 244, -3779 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1433, 117, -3109 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1391, 187, -3585 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1377, 461, -4600 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1298, 370, -4341 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1623, 432, -4822 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1610, 314, -4364 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1687, 249, -4045 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2202, 471, -5061 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1897, 515, -5115 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2062, 377, -4705 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2043, 372, -4430 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2208, 322, -4292 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2350, 360, -4518 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3054, 706, -5064 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3530, 698, -4954 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2828, 699, -5097 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2733, 712, -5247 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2485, 558, -5081 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2748, 525, -4884 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3004, 462, -4732 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2619, 344, -4545 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -2939, 362, -4312 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3384, 466, -4440 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4271, 767, -4688 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4032, 810, -4968 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3811, 574, -4540 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3593, 540, -4287 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3695, 540, -4151 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3938, 556, -4213 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4652, 857, -4325 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4800, 924, -4515 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4529, 890, -4574 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4320, 731, -4435 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4327, 642, -4182 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4082, 573, -3902 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4975, 850, -3933 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -5073, 910, -3011 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4858, 806, -3416 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4402, 720, -3501 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4177, 668, -3298 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4378, 756, -3053 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4604, 776, -3150 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4533, 771, -2835 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4792, 937, -2198 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4871, 913, -2466 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4815, 880, -2555 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4572, 899, -1762 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4608, 898, -2044 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4464, 758, -2562 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4356, 781, -2213 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4249, 804, -1864 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4142, 849, -1368 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4300, 872, -1169 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -4145, 872, -850 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -839, 55, -2507 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1221, 18, -2132 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1108, 42, -2446 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1199, 0, -1753 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -1191, 0, -1115 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -950, 0, -1339 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -988, 0, -1657 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3400, 461, 2990 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3332, 439, 3160 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3248, 563, 2056 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3486, 574, 1851 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3678, 743, 673 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x2D, -3524, 706, 895 }, // SCENE_GORONRACE -> SCENE_00KEIKOKU
++    { 0x5D, 1163, 0, -209 }, // SCENE_GORONRACE -> SCENE_17SETUGEN
++    { 0x5D, 1443, 0, -292 }, // SCENE_GORONRACE -> SCENE_17SETUGEN
++    { 0x11, 1440, 100, -274 }, // SCENE_TOWN -> SCENE_BOWLING
++    { 0x12, 1100, 200, -2040 }, // SCENE_TOWN -> SCENE_SONCHONOIE
++    { 0x15, 1038, 100, -951 }, // SCENE_TOWN -> SCENE_MILK_BAR
++    { 0x17, 610, 100, -120 }, // SCENE_TOWN -> SCENE_TAKARAYA
++    { 0x20, 1128, 100, 288 }, // SCENE_TOWN -> SCENE_SYATEKI_MIZU
++    { 0x29, 1896, 80, -1794 }, // SCENE_TOWN -> SCENE_TENMON_DAI
++    { 0x29, 597, 148, -634 }, // SCENE_TOWN -> SCENE_TENMON_DAI
++    { 0x2D, 1600, 60, -710 }, // SCENE_TOWN -> SCENE_00KEIKOKU
++    { 0x61, 668, 100, -895 }, // SCENE_TOWN -> SCENE_YADOYA
++    { 0x61, 477, 280, -1320 }, // SCENE_TOWN -> SCENE_YADOYA
++    { 0x6E, 644, 200, -1784 }, // SCENE_TOWN -> SCENE_BACKTOWN
++    { 0x6F, 284, 100, -775 }, // SCENE_TOWN -> SCENE_CLOCKTOWER
++    { 0x6F, 514, 44, 240 }, // SCENE_TOWN -> SCENE_CLOCKTOWER
++    { 0x0D, -1522, 45, 18 }, // SCENE_ICHIBA -> SCENE_AYASHIISHOP
++    { 0x2D, -2237, 200, -1084 }, // SCENE_ICHIBA -> SCENE_00KEIKOKU
++    { 0x2E, -1610, 200, -1454 }, // SCENE_ICHIBA -> SCENE_POSTHOUSE
++    { 0x34, -1820, 105, -180 }, // SCENE_ICHIBA -> SCENE_8ITEMSHOP
++    { 0x39, -1406, 200, -770 }, // SCENE_ICHIBA -> SCENE_TAKARAKUJI
++    { 0x54, -1870, 200, -1456 }, // SCENE_ICHIBA -> SCENE_DOUJOU
++    { 0x68, -2016, 165, -478 }, // SCENE_ICHIBA -> SCENE_BOMYA
++    { 0x6F, -884, 0, -100 }, // SCENE_ICHIBA -> SCENE_CLOCKTOWER
++    { 0x6F, -1100, 150, -1098 }, // SCENE_ICHIBA -> SCENE_CLOCKTOWER
++    { 0x26, -1204, 264, -2013 }, // SCENE_BACKTOWN -> SCENE_YOUSEI_IZUMI
++    { 0x2D, -470, 200, -2640 }, // SCENE_BACKTOWN -> SCENE_00KEIKOKU
++    { 0x6C, 746, 200, -1784 }, // SCENE_BACKTOWN -> SCENE_TOWN
++    { 0x6F, -264, 196, -1466 }, // SCENE_BACKTOWN -> SCENE_CLOCKTOWER
++    { 0x19, -280, 338, -955 }, // SCENE_CLOCKTOWER -> SCENE_OKUJOU
++    { 0x2D, -280, 0, 840 }, // SCENE_CLOCKTOWER -> SCENE_00KEIKOKU
++    { 0x63, -280, 0, -887 }, // SCENE_CLOCKTOWER -> SCENE_INSIDETOWER
++    { 0x6C, 316, 100, -775 }, // SCENE_CLOCKTOWER -> SCENE_TOWN
++    { 0x6C, 534, 50, 240 }, // SCENE_CLOCKTOWER -> SCENE_TOWN
++    { 0x6D, -916, 0, -100 }, // SCENE_CLOCKTOWER -> SCENE_ICHIBA
++    { 0x6D, -1100, 150, -1100 }, // SCENE_CLOCKTOWER -> SCENE_ICHIBA
++    { 0x6E, -260, 200, -1516 }, // SCENE_CLOCKTOWER -> SCENE_BACKTOWN
++    { 0x70, -990, 100, 524 }, // SCENE_CLOCKTOWER -> SCENE_ALLEY
++    { 0x0D, -2071, -120, -193 }, // SCENE_ALLEY -> SCENE_AYASHIISHOP
++    { 0x6F, -1196, 75, 395 }, // SCENE_ALLEY -> SCENE_CLOCKTOWER
++};
++
++const ExitRange gSceneExits[SCENE_COUNT_MQ] = {
++    { 0, 8 }, // 0x00 SCENE_20SICHITAI2
++    { 8, 0 }, // 0x01 
++    { 8, 0 }, // 0x02 
++    { 8, 0 }, // 0x03 
++    { 8, 0 }, // 0x04 
++    { 8, 0 }, // 0x05 
++    { 8, 0 }, // 0x06 
++    { 8, 0 }, // 0x07 SCENE_KAKUSIANA
++    { 8, 0 }, // 0x08 SCENE_SPOT00
++    { 8, 0 }, // 0x09 
++    { 8, 1 }, // 0x0A SCENE_WITCH_SHOP
++    { 9, 0 }, // 0x0B SCENE_LAST_BS
++    { 9, 2 }, // 0x0C SCENE_HAKASHITA
++    { 11, 2 }, // 0x0D SCENE_AYASHIISHOP
++    { 13, 0 }, // 0x0E 
++    { 13, 0 }, // 0x0F 
++    { 13, 2 }, // 0x10 SCENE_OMOYA
++    { 15, 1 }, // 0x11 SCENE_BOWLING
++    { 16, 1 }, // 0x12 SCENE_SONCHONOIE
++    { 17, 11 }, // 0x13 SCENE_IKANA
++    { 28, 10 }, // 0x14 SCENE_KAIZOKU
++    { 38, 1 }, // 0x15 SCENE_MILK_BAR
++    { 39, 1 }, // 0x16 SCENE_INISIE_N
++    { 40, 1 }, // 0x17 SCENE_TAKARAYA
++    { 41, 5 }, // 0x18 SCENE_INISIE_R
++    { 46, 0 }, // 0x19 SCENE_OKUJOU
++    { 46, 1 }, // 0x1A SCENE_OPENINGDAN
++    { 47, 3 }, // 0x1B SCENE_MITURIN
++    { 50, 5 }, // 0x1C SCENE_13HUBUKINOMITI
++    { 55, 3 }, // 0x1D SCENE_CASTLE
++    { 58, 0 }, // 0x1E SCENE_DEKUTES
++    { 58, 0 }, // 0x1F SCENE_MITURIN_BS
++    { 58, 1 }, // 0x20 SCENE_SYATEKI_MIZU
++    { 59, 2 }, // 0x21 SCENE_HAKUGIN
++    { 61, 4 }, // 0x22 SCENE_ROMANYMAE
++    { 65, 12 }, // 0x23 SCENE_PIRATE
++    { 77, 1 }, // 0x24 SCENE_SYATEKI_MORI
++    { 78, 2 }, // 0x25 SCENE_SINKAI
++    { 80, 0 }, // 0x26 SCENE_YOUSEI_IZUMI
++    { 80, 1 }, // 0x27 SCENE_KINSTA1
++    { 81, 1 }, // 0x28 SCENE_KINDAN2
++    { 82, 2 }, // 0x29 SCENE_TENMON_DAI
++    { 84, 0 }, // 0x2A SCENE_LAST_DEKU
++    { 84, 5 }, // 0x2B SCENE_22DEKUCITY
++    { 89, 1 }, // 0x2C SCENE_KAJIYA
++    { 90, 12 }, // 0x2D SCENE_00KEIKOKU
++    { 102, 1 }, // 0x2E SCENE_POSTHOUSE
++    { 103, 1 }, // 0x2F SCENE_LABO
++    { 104, 1 }, // 0x30 SCENE_DANPEI2TEST
++    { 105, 0 }, // 0x31 
++    { 105, 2 }, // 0x32 SCENE_16GORON_HOUSE
++    { 107, 7 }, // 0x33 SCENE_33ZORACITY
++    { 114, 1 }, // 0x34 SCENE_8ITEMSHOP
++    { 115, 8 }, // 0x35 SCENE_F01
++    { 123, 0 }, // 0x36 SCENE_INISIE_BS
++    { 123, 11 }, // 0x37 SCENE_30GYOSON
++    { 134, 6 }, // 0x38 SCENE_31MISAKI
++    { 140, 1 }, // 0x39 SCENE_TAKARAKUJI
++    { 141, 0 }, // 0x3A 
++    { 141, 6 }, // 0x3B SCENE_TORIDE
++    { 147, 1 }, // 0x3C SCENE_FISHERMAN
++    { 148, 1 }, // 0x3D SCENE_GORONSHOP
++    { 149, 2 }, // 0x3E SCENE_DEKU_KING
++    { 151, 0 }, // 0x3F SCENE_LAST_GORON
++    { 151, 4 }, // 0x40 SCENE_24KEMONOMITI
++    { 155, 1 }, // 0x41 SCENE_F01_B
++    { 156, 1 }, // 0x42 SCENE_F01C
++    { 157, 6 }, // 0x43 SCENE_BOTI
++    { 163, 0 }, // 0x44 SCENE_HAKUGIN_BS
++    { 163, 8 }, // 0x45 SCENE_20SICHITAI
++    { 171, 2 }, // 0x46 SCENE_21MITURINMAE
++    { 173, 0 }, // 0x47 SCENE_LAST_ZORA
++    { 173, 2 }, // 0x48 SCENE_11GORONNOSATO2
++    { 175, 3 }, // 0x49 SCENE_SEA
++    { 178, 1 }, // 0x4A SCENE_35TAKI
++    { 179, 2 }, // 0x4B SCENE_REDEAD
++    { 181, 5 }, // 0x4C SCENE_BANDROOM
++    { 186, 3 }, // 0x4D SCENE_11GORONNOSATO
++    { 189, 1 }, // 0x4E SCENE_GORON_HAKA
++    { 190, 1 }, // 0x4F SCENE_SECOM
++    { 191, 6 }, // 0x50 SCENE_10YUKIYAMANOMURA
++    { 197, 1 }, // 0x51 SCENE_TOUGITES
++    { 198, 1 }, // 0x52 SCENE_DANPEI
++    { 199, 5 }, // 0x53 SCENE_IKANAMAE
++    { 204, 1 }, // 0x54 SCENE_DOUJOU
++    { 205, 1 }, // 0x55 SCENE_MUSICHOUSE
++    { 206, 1 }, // 0x56 SCENE_IKNINSIDE
++    { 207, 1 }, // 0x57 SCENE_MAP_SHOP
++    { 208, 2 }, // 0x58 SCENE_F40
++    { 210, 1 }, // 0x59 SCENE_F41
++    { 211, 7 }, // 0x5A SCENE_10YUKIYAMANOMURA2
++    { 218, 5 }, // 0x5B SCENE_14YUKIDAMANOMITI
++    { 223, 3 }, // 0x5C SCENE_12HAKUGINMAE
++    { 226, 3 }, // 0x5D SCENE_17SETUGEN
++    { 229, 3 }, // 0x5E SCENE_17SETUGEN2
++    { 232, 0 }, // 0x5F SCENE_SEA_BS
++    { 232, 1 }, // 0x60 SCENE_RANDOM
++    { 233, 2 }, // 0x61 SCENE_YADOYA
++    { 235, 0 }, // 0x62 SCENE_KONPEKI_ENT
++    { 235, 2 }, // 0x63 SCENE_INSIDETOWER
++    { 237, 12 }, // 0x64 SCENE_26SARUNOMORI
++    { 249, 1 }, // 0x65 SCENE_LOST_WOODS
++    { 250, 0 }, // 0x66 SCENE_LAST_LINK
++    { 250, 0 }, // 0x67 SCENE_SOUGEN
++    { 250, 1 }, // 0x68 SCENE_BOMYA
++    { 251, 0 }, // 0x69 SCENE_KYOJINNOMA
++    { 251, 4 }, // 0x6A SCENE_KOEPONARACE
++    { 255, 200 }, // 0x6B SCENE_GORONRACE
++    { 455, 13 }, // 0x6C SCENE_TOWN
++    { 468, 9 }, // 0x6D SCENE_ICHIBA
++    { 477, 4 }, // 0x6E SCENE_BACKTOWN
++    { 481, 9 }, // 0x6F SCENE_CLOCKTOWER
++    { 490, 2 }, // 0x70 SCENE_ALLEY
++};
+diff --git a/mm/2s2h/Enhancements/Touch/MMQuest.c b/mm/2s2h/Enhancements/Touch/MMQuest.c
+new file mode 100644
+index 0000000..6bc4bcc
+--- /dev/null
++++ b/mm/2s2h/Enhancements/Touch/MMQuest.c
+@@ -0,0 +1,525 @@
++// Majora's Mask touch mod: main quest tracker + Tatl trail (ported from the Recompiled mod).
++#include "global.h"
++#include "MMQuestData.h"
++
++// ======================================================================
++// Quest steps
++// ======================================================================
++#define MAX_TARGETS 3
++#define NONE -1
++
++typedef struct {
++    u8 chapter;
++    const char* title;
++    const char* text;
++    s16 targets[MAX_TARGETS]; // scenes, in order of preference; NONE = unused
++    s16 noTrailScenes[2];     // scenes where the trail switches off (e.g. inside a dungeon)
++    s16 posScene;             // if Link is in this scene, point at pos instead
++    s16 posX, posY, posZ;
++} QuestStep;
++
++enum { CH_FIRST, CH_WOODFALL, CH_SNOWHEAD, CH_GREATBAY, CH_IKANA, CH_FINALE, CH_MAX };
++static const char* sChapterNames[CH_MAX] = { "First Cycle", "Woodfall", "Snowhead", "Great Bay", "Ikana", "Finale" };
++
++#define T1(a) { a, NONE, NONE }
++#define T2(a, b) { a, b, NONE }
++#define NT0 { NONE, NONE }
++#define NOPOS NONE, 0, 0, 0
++
++enum {
++    // First cycle (Deku Link)
++    Q_FAIRY_FIND, Q_FAIRY_RETURN, Q_BOMBERS, Q_OBSERVATORY, Q_MOONS_TEAR, Q_TRADE_TEAR, Q_CLOCK_TOWER,
++    // Woodfall
++    Q_SWAMP, Q_TOURIST, Q_POTION_SHOP, Q_FOLLOW_MONKEY, Q_GET_POTION, Q_HEAL_KOUME, Q_BOAT, Q_SONATA,
++    Q_WOODFALL, Q_RAISE_TEMPLE, Q_WOODFALL_TEMPLE, Q_RETURN_PRINCESS,
++    // Snowhead
++    Q_MOUNTAIN_VILLAGE, Q_LENS, Q_DARMANI, Q_ELDER, Q_ELDERS_SON, Q_GIANT_GORON, Q_SNOWHEAD_TEMPLE,
++    // Great Bay
++    Q_POWDER_KEG, Q_BOULDER, Q_EPONA, Q_GREAT_BAY, Q_MIKAU, Q_ZORA_HALL, Q_FORTRESS, Q_EGGS, Q_LAB_TANK, Q_TURTLE,
++    Q_GREAT_BAY_TEMPLE,
++    // Ikana
++    Q_GARO, Q_IKANA_CANYON, Q_STORMS, Q_GIBDO, Q_MIRROR_SHIELD, Q_CASTLE, Q_IGOS, Q_STONE_TOWER, Q_CLIMB_TOWER,
++    Q_LIGHT_ARROWS, Q_INVERT_TOWER, Q_INVERTED_TEMPLE,
++    // Finale
++    Q_ROOFTOP, Q_MOON,
++    Q_COUNT
++};
++
++static const QuestStep sSteps[Q_COUNT] = {
++    [Q_FAIRY_FIND] = { CH_FIRST, "Find the stray fairy",
++        "Catch the glowing stray fairy in the Laundry Pool (daytime) or East Clock Town (at night).",
++        T1(0x70), NT0, NOPOS },
++    [Q_FAIRY_RETURN] = { CH_FIRST, "Visit the Great Fairy",
++        "Bring the stray fairy to the Fairy Fountain in North Clock Town to get magic.",
++        T1(0x26), NT0, NOPOS },
++    [Q_BOMBERS] = { CH_FIRST, "Learn the Bombers' code",
++        "Catch all five Bombers in their hide-and-seek game around North Clock Town.",
++        T1(0x6E), NT0, NOPOS },
++    [Q_OBSERVATORY] = { CH_FIRST, "Go to the Astral Observatory",
++        "Give the code to the Bomber guarding the hideout in East Clock Town and go through to the Observatory.",
++        T1(0x29), NT0, NOPOS },
++    [Q_MOONS_TEAR] = { CH_FIRST, "Grab the Moon's Tear",
++        "Look through the Observatory telescope, then pick up the Moon's Tear that lands just outside in Termina Field.",
++        T1(0x2D), NT0, 0x2D, 3914, 279, 1458 },
++    [Q_TRADE_TEAR] = { CH_FIRST, "Trade the Moon's Tear",
++        "Give the Moon's Tear to the Deku Scrub on the flower in South Clock Town.",
++        T1(0x6F), NT0, 0x6F, -692, 0, -348 },
++    [Q_CLOCK_TOWER] = { CH_FIRST, "Climb the Clock Tower",
++        "At midnight on the Final Day the tower opens. Launch from the Deku flower to reach the top and get your Ocarina back.",
++        T1(0x19), NT0, NOPOS },
++
++    [Q_SWAMP] = { CH_WOODFALL, "Head to the Southern Swamp",
++        "Take the road south from Termina Field to the Southern Swamp.",
++        T1(0x45), NT0, NOPOS },
++    [Q_TOURIST] = { CH_WOODFALL, "Go to the boat shop",
++        "Visit Tourist Information at the swamp's edge and ask about the boat cruise.",
++        T1(0x57), NT0, NOPOS },
++    [Q_POTION_SHOP] = { CH_WOODFALL, "Go to the Potion Shop",
++        "Ask Kotake at the Magic Hags' Potion Shop where her sister Koume went.",
++        T1(0x0A), NT0, NOPOS },
++    [Q_FOLLOW_MONKEY] = { CH_WOODFALL, "Follow the monkey",
++        "In the Woods of Mystery, follow the monkey through the maze to find Koume.",
++        T1(0x64), NT0, NOPOS },
++    [Q_GET_POTION] = { CH_WOODFALL, "Get the bottle from the witch",
++        "Go back to the Potion Shop - Kotake gives you a bottle of Red Potion for Koume.",
++        T1(0x0A), NT0, NOPOS },
++    [Q_HEAL_KOUME] = { CH_WOODFALL, "Heal Koume",
++        "Give the Red Potion to Koume in the Woods of Mystery.",
++        T1(0x64), NT0, NOPOS },
++    [Q_BOAT] = { CH_WOODFALL, "Take the boat cruise",
++        "Ride the boat from Tourist Information to the Deku Palace.",
++        T1(0x2B), NT0, NOPOS },
++    [Q_SONATA] = { CH_WOODFALL, "Find the captured monkey",
++        "Sneak through the Deku Palace gardens as Deku Link without being seen. The monkey teaches you the Sonata of Awakening.",
++        T1(0x2B), NT0, NOPOS },
++    [Q_WOODFALL] = { CH_WOODFALL, "Go to Woodfall",
++        "Use the Deku flowers to cross the swamp to Woodfall.",
++        T1(0x46), NT0, NOPOS },
++    [Q_RAISE_TEMPLE] = { CH_WOODFALL, "Raise Woodfall Temple",
++        "Stand on the Deku platform in the middle of Woodfall and play the Sonata of Awakening.",
++        T1(0x46), NT0, NOPOS },
++    [Q_WOODFALL_TEMPLE] = { CH_WOODFALL, "Clear Woodfall Temple",
++        "Find the Hero's Bow inside, then defeat Odolwa.",
++        T2(0x1B, 0x46), { 0x1B, NONE }, NOPOS },
++    [Q_RETURN_PRINCESS] = { CH_WOODFALL, "Return the Deku Princess",
++        "Bring the Deku Princess (in your bottle) back to the Deku King's chamber.",
++        T1(0x3E), NT0, NOPOS },
++
++    [Q_MOUNTAIN_VILLAGE] = { CH_SNOWHEAD, "Go to Mountain Village",
++        "Head north from Termina Field. Shoot the icicles blocking the path with the Hero's Bow.",
++        T1(0x50), NT0, NOPOS },
++    [Q_LENS] = { CH_SNOWHEAD, "Get the Lens of Truth",
++        "Follow the owl's hidden path near Goron Village to the Lone Peak Shrine.",
++        T1(0x4D), NT0, NOPOS },
++    [Q_DARMANI] = { CH_SNOWHEAD, "Heal Darmani's ghost",
++        "Use the Lens of Truth in Mountain Village to find Darmani, follow him to the Goron Graveyard and play the Song of Healing.",
++        T1(0x4E), NT0, NOPOS },
++    [Q_ELDER] = { CH_SNOWHEAD, "Thaw the Goron Elder",
++        "The Elder is frozen near Snowhead. Melt him with hot spring water and talk to him as a Goron for the Lullaby Intro.",
++        T1(0x5C), NT0, NOPOS },
++    [Q_ELDERS_SON] = { CH_SNOWHEAD, "Calm the Elder's son",
++        "Play the Lullaby Intro to the crying baby Goron in the Goron Shrine to learn the full Goron Lullaby.",
++        T1(0x32), NT0, NOPOS },
++    [Q_GIANT_GORON] = { CH_SNOWHEAD, "Get past the giant Goron",
++        "On the Path to Snowhead, play the Goron Lullaby to put the giant Goron to sleep.",
++        T2(0x21, 0x5C), NT0, NOPOS },
++    [Q_SNOWHEAD_TEMPLE] = { CH_SNOWHEAD, "Clear Snowhead Temple",
++        "Find the Fire Arrows inside, then defeat Goht.",
++        T2(0x21, 0x5C), { 0x21, NONE }, NOPOS },
++
++    [Q_POWDER_KEG] = { CH_GREATBAY, "Earn a Powder Keg",
++        "As a Goron, talk to the Powder Keg Goron in Goron Village and pass his test.",
++        T1(0x48), NT0, NOPOS },
++    [Q_BOULDER] = { CH_GREATBAY, "Blow up the boulder",
++        "Place a Powder Keg next to the boulder blocking Milk Road.",
++        T1(0x22), NT0, NOPOS },
++    [Q_EPONA] = { CH_GREATBAY, "Learn Epona's Song",
++        "Help Romani at Romani Ranch (Day 1) to learn Epona's Song and get Epona back.",
++        T1(0x35), NT0, NOPOS },
++    [Q_GREAT_BAY] = { CH_GREATBAY, "Ride to Great Bay",
++        "Ride Epona and jump the fence on the west side of Termina Field.",
++        T1(0x37), NT0, NOPOS },
++    [Q_MIKAU] = { CH_GREATBAY, "Save the Zora guitarist",
++        "Push the injured Zora floating offshore back to the beach and play the Song of Healing.",
++        T1(0x37), NT0, NOPOS },
++    [Q_ZORA_HALL] = { CH_GREATBAY, "Visit Zora Hall",
++        "Swim as Zora Link to Zora Hall in Zora Cape and visit Lulu.",
++        T1(0x33), NT0, NOPOS },
++    [Q_FORTRESS] = { CH_GREATBAY, "Sneak into the Pirates' Fortress",
++        "Swim to the fortress through the water gate. You'll find the Hookshot inside.",
++        { 0x23, 0x14, 0x3B }, NT0, NOPOS },
++    [Q_EGGS] = { CH_GREATBAY, "Recover the Zora Eggs",
++        "Bottle the 4 eggs in the Pirates' Fortress and the 3 at Pinnacle Rock.",
++        { 0x23, 0x14, 0x3B }, NT0, NOPOS },
++    [Q_LAB_TANK] = { CH_GREATBAY, "Deliver the eggs",
++        "Put the Zora Eggs into the big tank at the Marine Research Lab.",
++        T1(0x2F), NT0, NOPOS },
++    [Q_TURTLE] = { CH_GREATBAY, "Wake the turtle",
++        "Play the New Wave Bossa Nova to Lulu at Zora Cape, then ride the turtle to the temple.",
++        T1(0x38), NT0, NOPOS },
++    [Q_GREAT_BAY_TEMPLE] = { CH_GREATBAY, "Clear Great Bay Temple",
++        "Find the Ice Arrows inside, then defeat Gyorg.",
++        T1(0x49), { 0x49, NONE }, NOPOS },
++
++    [Q_GARO] = { CH_IKANA, "Get Garo's Mask",
++        "Beat the Gorman Brothers in their horse race at Gorman Track.",
++        T1(0x6A), NT0, NOPOS },
++    [Q_IKANA_CANYON] = { CH_IKANA, "Get into Ikana Canyon",
++        "Wear Garo's Mask past the guard on the Road to Ikana, then Hookshot up the cliffs.",
++        T1(0x13), NT0, NOPOS },
++    [Q_STORMS] = { CH_IKANA, "Learn the Song of Storms",
++        "At night, find Flat's tomb Beneath the Graveyard in Ikana Graveyard.",
++        T1(0x43), NT0, NOPOS },
++    [Q_GIBDO] = { CH_IKANA, "Get the Gibdo Mask",
++        "Play the Song of Storms in Sharp's cave, then heal Pamela's father in the Music Box House.",
++        T1(0x55), NT0, NOPOS },
++    [Q_MIRROR_SHIELD] = { CH_IKANA, "Get the Mirror Shield",
++        "Wear the Gibdo Mask and explore Beneath the Well.",
++        T1(0x4B), NT0, NOPOS },
++    [Q_CASTLE] = { CH_IKANA, "Enter Ikana Castle",
++        "Leave the well through the exit by the Mirror Shield, into the Ancient Castle of Ikana.",
++        T1(0x1D), NT0, NOPOS },
++    [Q_IGOS] = { CH_IKANA, "Defeat Igos du Ikana",
++        "Reach the castle's throne room and defeat the king to learn the Elegy of Emptiness.",
++        T2(0x56, 0x1D), { 0x1D, 0x56 }, NOPOS },
++    [Q_STONE_TOWER] = { CH_IKANA, "Go to Stone Tower",
++        "Head up through Ikana Canyon to the foot of Stone Tower.",
++        T1(0x58), NT0, NOPOS },
++    [Q_CLIMB_TOWER] = { CH_IKANA, "Climb Stone Tower",
++        "Use the Elegy of Emptiness statues to hold down switches and climb to the temple.",
++        T2(0x16, 0x58), NT0, NOPOS },
++    [Q_LIGHT_ARROWS] = { CH_IKANA, "Find the Light Arrows",
++        "Work through Stone Tower Temple to find the Light Arrows.",
++        T2(0x16, 0x58), { 0x16, NONE }, NOPOS },
++    [Q_INVERT_TOWER] = { CH_IKANA, "Turn Stone Tower upside down",
++        "Outside the temple, shoot the red emblem with a Light Arrow.",
++        T2(0x59, 0x58), NT0, NOPOS },
++    [Q_INVERTED_TEMPLE] = { CH_IKANA, "Clear the Inverted Temple",
++        "Make your way through the Inverted Stone Tower Temple and defeat Twinmold.",
++        T2(0x18, 0x59), { 0x18, NONE }, NOPOS },
++
++    [Q_ROOFTOP] = { CH_FINALE, "Stop the Moon",
++        "At midnight on the Final Day, go to the top of the Clock Tower and play the Oath to Order.",
++        T1(0x19), NT0, NOPOS },
++    [Q_MOON] = { CH_FINALE, "Face Majora",
++        "Climb to the tree at the centre of the Moon.",
++        T1(0x67), { 0x67, NONE }, NOPOS },
++};
++
++static u8 sVisited[SCENE_COUNT_MQ];
++
++static bool Visited(s32 scene) {
++    return (scene >= 0) && (scene < SCENE_COUNT_MQ) && sVisited[scene];
++}
++
++static bool HasItem(u8 item) {
++    return INV_CONTENT(item) == item;
++}
++
++static bool HasBottleWith(u8 item) {
++    s32 slot;
++    for (slot = SLOT_BOTTLE_1; slot <= SLOT_BOTTLE_6; slot++) {
++        if (gSaveContext.save.saveInfo.inventory.items[slot] == item) return true;
++    }
++    return false;
++}
++
++static s32 GetMainQuestStep(void) {
++    // ---- First cycle ----
++    if (!HasItem(ITEM_OCARINA_OF_TIME)) {
++        u8 trade = INV_CONTENT(ITEM_MOONS_TEAR);
++        if (!gSaveContext.save.saveInfo.playerData.isMagicAcquired) {
++            return Visited(0x70) ? Q_FAIRY_RETURN : Q_FAIRY_FIND;
++        }
++        if (trade == ITEM_MOONS_TEAR) return Q_TRADE_TEAR;
++        if (trade != ITEM_NONE) return Q_CLOCK_TOWER;
++        if (Visited(0x29)) return Q_MOONS_TEAR;
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_BOMBERS_NOTEBOOK_EVENT_LEARNED_SECRET_CODE)) return Q_BOMBERS;
++        return Q_OBSERVATORY;
++    }
++
++    // ---- Woodfall ----
++    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_ODOLWA)) {
++        if (!CHECK_QUEST_ITEM(QUEST_SONG_SONATA)) {
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_SOUTHERN_SWAMP_POISONED)) return Q_SWAMP;
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_SAVED_KOUME)) {
++                bool foundKoume = CHECK_WEEKEVENTREG(WEEKEVENTREG_TALKED_KOUME_INJURED);
++                if (!foundKoume) {
++                    if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_TALKED_KOUME_KIOSK_EMPTY) && !Visited(0x0A)) return Q_TOURIST;
++                    if (!Visited(0x0A)) return Q_POTION_SHOP;
++                    return Q_FOLLOW_MONKEY;
++                }
++                if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_RECEIVED_RED_POTION_FOR_KOUME) && !HasBottleWith(ITEM_POTION_RED)) {
++                    return Q_GET_POTION;
++                }
++                return Q_HEAL_KOUME;
++            }
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_DEKU_PALACE)) return Q_BOAT;
++            return Q_SONATA;
++        }
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_WOODFALL)) return Q_WOODFALL;
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_WOODFALL_TEMPLE)) return Q_RAISE_TEMPLE;
++        return Q_WOODFALL_TEMPLE;
++    }
++    if (HasBottleWith(ITEM_DEKU_PRINCESS)) return Q_RETURN_PRINCESS;
++
++    // ---- Snowhead ----
++    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_GOHT)) {
++        if (!HasItem(ITEM_MASK_GORON)) {
++            if (!Visited(0x50) && !Visited(0x5A)) return Q_MOUNTAIN_VILLAGE;
++            if (!HasItem(ITEM_LENS_OF_TRUTH)) return Q_LENS;
++            return Q_DARMANI;
++        }
++        if (!CHECK_QUEST_ITEM(QUEST_SONG_LULLABY)) {
++            if (!CHECK_QUEST_ITEM(QUEST_SONG_LULLABY_INTRO)) return Q_ELDER;
++            return Q_ELDERS_SON;
++        }
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_SNOWHEAD_TEMPLE)) return Q_GIANT_GORON;
++        return Q_SNOWHEAD_TEMPLE;
++    }
++
++    // ---- Great Bay ----
++    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_GYORG)) {
++        if (!HasItem(ITEM_MASK_ZORA)) {
++            if (!CHECK_QUEST_ITEM(QUEST_SONG_EPONA)) {
++                if (!Visited(0x35)) {
++                    if (!HasItem(ITEM_POWDER_KEG) && !CHECK_WEEKEVENTREG(WEEKEVENTREG_HAS_POWDERKEG_PRIVILEGES)) {
++                        return Q_POWDER_KEG;
++                    }
++                    return Q_BOULDER;
++                }
++                return Q_EPONA;
++            }
++            if (!Visited(0x37)) return Q_GREAT_BAY;
++            return Q_MIKAU;
++        }
++        if (!CHECK_QUEST_ITEM(QUEST_SONG_BOSSA_NOVA)) {
++            if (HasBottleWith(ITEM_ZORA_EGG)) return Q_LAB_TANK;
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_ZORA_HALL)) return Q_ZORA_HALL;
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_PIRATES_FORTRESS)) return Q_FORTRESS;
++            return Q_EGGS;
++        }
++        if (!Visited(0x49)) return Q_TURTLE;
++        return Q_GREAT_BAY_TEMPLE;
++    }
++
++    // ---- Ikana ----
++    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_TWINMOLD)) {
++        if (!CHECK_QUEST_ITEM(QUEST_SONG_ELEGY)) {
++            if (!HasItem(ITEM_MASK_GARO) && !CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_IKANA_CANYON)) return Q_GARO;
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_IKANA_CANYON)) return Q_IKANA_CANYON;
++            if (!HasItem(ITEM_MASK_GIBDO)) {
++                return CHECK_QUEST_ITEM(QUEST_SONG_STORMS) ? Q_GIBDO : Q_STORMS;
++            }
++            if (GET_CUR_EQUIP_VALUE(EQUIP_TYPE_SHIELD) != EQUIP_VALUE_SHIELD_MIRROR) return Q_MIRROR_SHIELD;
++            if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_IKANA_CASTLE)) return Q_CASTLE;
++            return Q_IGOS;
++        }
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_STONE_TOWER)) return Q_STONE_TOWER;
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_STONE_TOWER_TEMPLE)) return Q_CLIMB_TOWER;
++        if (!HasItem(ITEM_ARROW_LIGHT)) return Q_LIGHT_ARROWS;
++        if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_STONE_TOWER_TEMPLE_INVERTED)) return Q_INVERT_TOWER;
++        return Q_INVERTED_TEMPLE;
++    }
++
++    // ---- Finale ----
++    if (!CHECK_WEEKEVENTREG(WEEKEVENTREG_ENTERED_THE_MOON)) return Q_ROOFTOP;
++    return Q_MOON;
++}
++
++// ======================================================================
++// Routing (breadth-first search over the scene exit graph)
++// ======================================================================
++// Returns the next scene to walk into to reach `target`, `target` itself if already there, or -1 if unreachable.
++static s32 NextSceneTowards(s32 from, s32 target) {
++    static s16 prev[SCENE_COUNT_MQ];
++    static u8 queue[SCENE_COUNT_MQ];
++    s32 head = 0, tail = 0, i;
++
++    if (from == target) return target;
++    if ((from < 0) || (from >= SCENE_COUNT_MQ) || (target < 0) || (target >= SCENE_COUNT_MQ)) return -1;
++
++    for (i = 0; i < SCENE_COUNT_MQ; i++) prev[i] = -2;
++    prev[from] = -1;
++    queue[tail++] = from;
++
++    while (head < tail) {
++        s32 u = queue[head++];
++        const ExitRange* r = &gSceneExits[u];
++        for (i = 0; i < r->count; i++) {
++            s32 v = gExitPoints[r->start + i].dst;
++            if ((v < SCENE_COUNT_MQ) && (prev[v] == -2)) {
++                prev[v] = u;
++                if (v == target) {
++                    // Walk back to the first hop.
++                    while (prev[v] != from) v = prev[v];
++                    return v;
++                }
++                queue[tail++] = v;
++            }
++        }
++    }
++    return -1;
++}
++
++
++// ======================================================================
++// State
++// ======================================================================
++static s32 sCachedStep = -1;
++static s32 sCachedScene = -1;
++static bool sHaveTarget = false;
++static Vec3f sTarget;
++
++// ======================================================================
++// Target selection
++// ======================================================================
++static void UpdateTarget(PlayState* play, Player* player, s32 step) {
++    const QuestStep* q = &sSteps[step];
++    s32 cur = play->sceneId;
++    s32 i;
++
++    sHaveTarget = false;
++
++    if ((q->posScene != NONE) && (cur == q->posScene)) {
++        sTarget.x = q->posX;
++        sTarget.y = q->posY;
++        sTarget.z = q->posZ;
++        sHaveTarget = true;
++        return;
++    }
++    for (i = 0; i < 2; i++) {
++        if (q->noTrailScenes[i] == cur) return;
++    }
++    for (i = 0; i < MAX_TARGETS; i++) {
++        s32 next;
++        if (q->targets[i] == NONE) break;
++        if (q->targets[i] == cur) return; // arrived: the panel text explains what to do here
++        next = NextSceneTowards(cur, q->targets[i]);
++        if (next >= 0) {
++            // Pick the closest exit from this scene that leads to `next`.
++            const ExitRange* r = &gSceneExits[cur];
++            f32 bestDist = 1e30f;
++            s32 j;
++            for (j = 0; j < r->count; j++) {
++                const ExitPoint* e = &gExitPoints[r->start + j];
++                if (e->dst == next) {
++                    f32 dx = e->x - player->actor.world.pos.x;
++                    f32 dz = e->z - player->actor.world.pos.z;
++                    f32 d = dx * dx + dz * dz;
++                    if (d < bestDist) {
++                        bestDist = d;
++                        sTarget.x = e->x;
++                        sTarget.y = e->y;
++                        sTarget.z = e->z;
++                        sHaveTarget = true;
++                    }
++                }
++            }
++            return;
++        }
++    }
++}
++
++// ======================================================================
++// Tatl trail (sparkles along the ground)
++// ======================================================================
++#define TRAIL_SPACING 45.0f
++#define TRAIL_POINTS 14
++
++static void DrawTrail(PlayState* play, Player* player) {
++    static Color_RGBA8 prim = { 255, 255, 210, 255 };
++    static Color_RGBA8 env = { 255, 210, 70, 0 };
++    Vec3f vel = { 0.0f, 0.4f, 0.0f };
++    Vec3f accel = { 0.0f, 0.0f, 0.0f };
++    Vec3f* from = &player->actor.world.pos;
++    f32 dx = sTarget.x - from->x;
++    f32 dy = sTarget.y - from->y;
++    f32 dz = sTarget.z - from->z;
++    f32 distXZ = sqrtf(dx * dx + dz * dz);
++    s32 n, k, pass;
++
++    if (distXZ < 90.0f) return;
++
++    n = (s32)(distXZ / TRAIL_SPACING);
++    if (n > TRAIL_POINTS) n = TRAIL_POINTS;
++    if (n < 1) return;
++
++    // Two sparkles a frame, marching away from Link, so the line "flows" toward the goal.
++    for (pass = 0; pass < 2; pass++) {
++        f32 t, frac;
++        Vec3f pos;
++        CollisionPoly* poly;
++        f32 floorY;
++
++        k = ((s32)(play->gameplayFrames) + pass * (n / 2 + 1)) % n;
++        t = (k + 1) * TRAIL_SPACING;
++        frac = t / distXZ;
++
++        pos.x = from->x + dx * frac;
++        pos.z = from->z + dz * frac;
++        pos.y = from->y + dy * frac + 120.0f;
++
++        floorY = BgCheck_EntityRaycastFloor1(&play->colCtx, &poly, &pos);
++        if (floorY <= BGCHECK_Y_MIN + 1.0f) continue;
++        if (fabsf(floorY - (from->y + dy * frac)) > 300.0f) continue;
++
++        pos.y = floorY + 6.0f;
++        pos.x += Rand_CenteredFloat(8.0f);
++        pos.z += Rand_CenteredFloat(8.0f);
++        EffectSsKirakira_SpawnSmall(play, &pos, &vel, &accel, &prim, &env);
++    }
++}
++
++
++// ======================================================================
++// Public API (used by MMMod.cpp)
++// ======================================================================
++s32 MMQuest_GetStep(void) {
++    return GetMainQuestStep();
++}
++
++const char* MMQuest_Title(s32 step) {
++    return sSteps[step].title;
++}
++
++const char* MMQuest_Text(s32 step) {
++    return sSteps[step].text;
++}
++
++const char* MMQuest_Chapter(s32 step) {
++    return sChapterNames[sSteps[step].chapter];
++}
++
++void MMQuest_Progress(s32 step, s32* index, s32* count) {
++    s32 i, first = -1, n = 0;
++    for (i = 0; i < Q_COUNT; i++) {
++        if (sSteps[i].chapter == sSteps[step].chapter) {
++            if (first < 0) first = i;
++            n++;
++        }
++    }
++    *index = step - first + 1;
++    *count = n;
++}
++
++// Called once per game frame during gameplay.
++void MMQuest_Update(PlayState* play, s32 trailOn) {
++    Player* player = GET_PLAYER(play);
++    s32 step;
++
++    if (player == NULL) return;
++    if ((play->sceneId >= 0) && (play->sceneId < SCENE_COUNT_MQ)) sVisited[play->sceneId] = true;
++
++    step = GetMainQuestStep();
++    if ((step != sCachedStep) || (play->sceneId != sCachedScene) || ((play->gameplayFrames % 10) == 0)) {
++        sCachedStep = step;
++        sCachedScene = play->sceneId;
++        UpdateTarget(play, player, step);
++    }
++
++    if (trailOn && sHaveTarget && (play->msgCtx.msgMode == MSGMODE_NONE) && (play->csCtx.state == CS_STATE_IDLE) &&
++        !Player_InCsMode(play) && (play->transitionTrigger == TRANS_TRIGGER_OFF)) {
++        DrawTrail(play, player);
++    }
++}
+diff --git a/mm/2s2h/Enhancements/Touch/MMQuestData.h b/mm/2s2h/Enhancements/Touch/MMQuestData.h
+new file mode 100644
+index 0000000..41e8575
+--- /dev/null
++++ b/mm/2s2h/Enhancements/Touch/MMQuestData.h
+@@ -0,0 +1,20 @@
++#ifndef QUEST_DATA_H
++#define QUEST_DATA_H
++#include "global.h"
++
++#define SCENE_COUNT_MQ 0x71
++
++typedef struct {
++    u8 dst;
++    s16 x, y, z;
++} ExitPoint;
++
++typedef struct {
++    u16 start;
++    u16 count;
++} ExitRange;
++
++extern const ExitPoint gExitPoints[];
++extern const ExitRange gSceneExits[SCENE_COUNT_MQ];
++
++#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..95e992d
+index 0000000..1bbca1e
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,139 @@
-+// Majora's Mask touch mod (batch 1): bridge between the custom Android touch overlay and the game.
-+//  - Touch buttons for any N64 input (items, target, shield...) are injected straight into the pad (padmgr.c)
-+//  - Jump button and sprint toggle
-+//  - A one-time preset that switches on the built-in 2 Ship features we use
+@@ -0,0 +1,570 @@
++// Majora's Mask touch mod - game side.
++//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
++//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
++//  Everything the Android overlay asks for is queued and done on the game thread.
 +#include <libultraship/bridge/consolevariablebridge.h>
 +#include "2s2h/GameInteractor/GameInteractor.h"
 +#include "2s2h/ShipInit.hpp"
++#include "2s2h/Enhancements/Saving/SavingEnhancements.h"
++#include <atomic>
++#include <mutex>
++#include <string>
 +
 +extern "C" {
 +#include "variables.h"
++#include "functions.h"
++#include "z64shrink_window.h"
 +#include "assets/objects/gameplay_keep/gameplay_keep.h"
 +void func_80834DB8(Player* player, PlayerAnimationHeader* anim, f32 speed, PlayState* play);
++s32 Player_TryCsAction(PlayState* play, Player* thisx, PlayerCsAction csAction);
++s32 Player_GetMovementSpeedAndYaw(Player* thisx, f32* outSpeedTarget, s16* outYawTarget, f32 speedMode, PlayState* play);
++void Play_UpdateMain(PlayState* thisx);
++s32 MMQuest_GetStep(void);
++const char* MMQuest_Title(s32 step);
++const char* MMQuest_Text(s32 step);
++const char* MMQuest_Chapter(s32 step);
++void MMQuest_Progress(s32 step, s32* index, s32* count);
++void MMQuest_Update(PlayState* play, s32 trailOn);
 +}
 +
 +#ifdef __ANDROID__
 +#include <jni.h>
 +#endif
 +
-+// ---------------------------------------------------------------- shared with padmgr.c
-+extern "C" {
-+volatile u32 gMmTouchN64Buttons = 0;  // N64 buttons currently held on the touch overlay
-+volatile s32 gMmTouchOverlayActive = 0; // when set, C-buttons only come from the overlay (right stick = camera)
-+}
-+
-+static volatile bool sJumpRequested = false;
-+static bool sSprintOn = false;
-+static s32 sStoppedFrames = 0;
-+
 +#define CVAR_SPEED_MODE "gCheats.SpeedModifier.Mode"
 +#define CVAR_SPEED_VALUE "gCheats.SpeedModifier.Value"
 +#define CVAR_JUMP_HEIGHT "gMMTouch.JumpHeight"
++#define CVAR_LONG_DIVES "gMMTouch.LongDives"
 +#define CVAR_PRESET_VERSION "gMMTouch.PresetVersion"
 +
++enum {
++    ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6, ACT_TRAIL = 7,
++};
++
++// State bits reported to the overlay
++enum {
++    ST_CAN_SKIP = 1 << 0, ST_OCARINA = 1 << 1, ST_SHOW_QUEST = 1 << 2, ST_SPRINT = 1 << 3, ST_TRAIL = 1 << 4,
++    ST_SKIPPING = 1 << 5,
++};
++
++// ---------------------------------------------------------------- shared state
++extern "C" {
++volatile u32 gMmTouchN64Buttons = 0;
++volatile s32 gMmTouchOverlayActive = 0;
++}
++
++static std::atomic<int> sRequestMask{ 0 };
++static std::atomic<int> sSongRequest{ -1 };
++static std::atomic<int> sStateBits{ 0 };
++static std::atomic<int> sFrameCounter{ 0 };
++static std::mutex sTextMutex;
++static std::string sQuestText;
++static std::string sMessage;
++
++static bool sSprintOn = false;
++static s32 sStoppedFrames = 0;
++static bool sTrailOn = true;
++
++static void PostMessage(const char* msg) {
++    std::lock_guard<std::mutex> lock(sTextMutex);
++    sMessage = msg;
++}
++
++static bool TakeRequest(int act) {
++    int bit = 1 << act;
++    return (sRequestMask.fetch_and(~bit) & bit) != 0;
++}
++
++// ---------------------------------------------------------------- ocarina auto-play
++typedef struct {
++    const char* name;
++    u8 song;
++    u8 quest;
++} SongEntry;
++
++static const SongEntry sAllSongs[] = {
++    { "Song of Time", OCARINA_SONG_TIME, QUEST_SONG_TIME },
++    { "Inverted Song of Time", OCARINA_SONG_INVERTED_TIME, QUEST_SONG_TIME },
++    { "Song of Double Time", OCARINA_SONG_DOUBLE_TIME, QUEST_SONG_TIME },
++    { "Song of Healing", OCARINA_SONG_HEALING, QUEST_SONG_HEALING },
++    { "Epona's Song", OCARINA_SONG_EPONAS, QUEST_SONG_EPONA },
++    { "Song of Soaring", OCARINA_SONG_SOARING, QUEST_SONG_SOARING },
++    { "Song of Storms", OCARINA_SONG_STORMS, QUEST_SONG_STORMS },
++    { "Sonata of Awakening", OCARINA_SONG_SONATA, QUEST_SONG_SONATA },
++    { "Goron Lullaby", OCARINA_SONG_GORON_LULLABY, QUEST_SONG_LULLABY },
++    { "Lullaby Intro", OCARINA_SONG_GORON_LULLABY_INTRO, QUEST_SONG_LULLABY_INTRO },
++    { "New Wave Bossa Nova", OCARINA_SONG_NEW_WAVE, QUEST_SONG_BOSSA_NOVA },
++    { "Elegy of Emptiness", OCARINA_SONG_ELEGY, QUEST_SONG_ELEGY },
++    { "Oath to Order", OCARINA_SONG_OATH, QUEST_SONG_OATH },
++};
++#define SONG_COUNT ((s32)(sizeof(sAllSongs) / sizeof(sAllSongs[0])))
++
++static bool SongLearned(s32 i) {
++    if (!CHECK_QUEST_ITEM(sAllSongs[i].quest)) return false;
++    if ((sAllSongs[i].song == OCARINA_SONG_GORON_LULLABY_INTRO) && CHECK_QUEST_ITEM(QUEST_SONG_LULLABY)) return false;
++    return true;
++}
++
++static const u16 sNoteButtons[] = { BTN_A, BTN_CDOWN, BTN_CRIGHT, BTN_CLEFT, BTN_CUP };
++#define NOTE_HOLD 3
++#define NOTE_GAP 2
++static s32 sSeqSong = -1, sSeqNote = 0, sSeqTimer = 0;
++
++// Called by padmgr.c once per frame for controller 1: buttons to add to the pad.
++extern "C" u32 MMMod_TouchButtons(void) {
++    u32 buttons = gMmTouchN64Buttons;
++    int req = sSongRequest.exchange(-1);
++
++    if ((req >= 0) && (req < SONG_COUNT)) {
++        sSeqSong = sAllSongs[req].song;
++        sSeqNote = 0;
++        sSeqTimer = 0;
++    }
++    if (sSeqSong >= 0) {
++        OcarinaSongButtons* notes = &gOcarinaSongButtons[sSeqSong];
++        if ((gPlayState == nullptr) || (gPlayState->msgCtx.msgMode != MSGMODE_OCARINA_PLAYING) ||
++            (sSeqNote >= notes->numButtons)) {
++            sSeqSong = -1;
++        } else {
++            s32 t = sSeqTimer++;
++            if (t < NOTE_HOLD) {
++                u8 idx = notes->buttonIndex[sSeqNote];
++                if (idx < 5) buttons |= sNoteButtons[idx];
++            } else if (t >= NOTE_HOLD + NOTE_GAP - 1) {
++                sSeqNote++;
++                sSeqTimer = 0;
++            }
++        }
++    }
++    return buttons;
++}
++
++// ---------------------------------------------------------------- jump / sprint
 +static void SetSprint(bool on) {
 +    sSprintOn = on;
 +    sStoppedFrames = 0;
-+    // Uses 2 Ship's own speed modifier (covers running and swimming); mode 1 = always on.
 +    CVarSetInteger(CVAR_SPEED_MODE, on ? 1 : 0);
 +    ShipInit::Init(CVAR_SPEED_MODE);
 +}
 +
-+// ---------------------------------------------------------------- jump
 +static bool CanJump(Player* player) {
 +    if (player == nullptr || gPlayState == nullptr) return false;
 +    if ((player->transformation != PLAYER_FORM_HUMAN) && (player->transformation != PLAYER_FORM_FIERCE_DEITY)) return false;
@@ -654,15 +2170,10 @@ index 0000000..95e992d
 +static void OnPlayerInputs(Input* input) {
 +    Player* player = GET_PLAYER(gPlayState);
 +
-+    if (sJumpRequested) {
-+        sJumpRequested = false;
-+        if (CanJump(player)) {
-+            func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump,
-+                          CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f), gPlayState);
-+        }
++    if (TakeRequest(ACT_JUMP) && CanJump(player)) {
++        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump,
++                      CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f), gPlayState);
 +    }
-+
-+    // Sprint switches itself off when Link stops moving.
 +    if (sSprintOn && player != nullptr) {
 +        if (player->speedXZ < 0.5f) {
 +            if (++sStoppedFrames > 8) SetSprint(false);
@@ -672,7 +2183,311 @@ index 0000000..95e992d
 +    }
 +}
 +
-+// ---------------------------------------------------------------- default settings (applied once)
++// ---------------------------------------------------------------- unlimited diving (called from z_player.c)
++extern "C" s32 MMMod_LongDive(void) {
++    return CVarGetInteger(CVAR_LONG_DIVES, 1);
++}
++
++extern "C" void MMMod_DiveSteer(Player* player, PlayState* play) {
++    f32 speedTarget;
++    s16 yawTarget;
++    if (!MMMod_LongDive()) return;
++    player->underwaterTimer = 0;
++    if ((player->actor.bgCheckFlags & BGCHECKFLAG_GROUND) && (player->actor.velocity.y < 0.0f)) {
++        player->actor.velocity.y = 0.0f;
++    }
++    Player_GetMovementSpeedAndYaw(player, &speedTarget, &yawTarget, 0.0f, play);
++    Math_StepToF(&player->speedXZ, speedTarget * 0.45f, 0.5f);
++    if (speedTarget > 0.0f) {
++        Math_ScaledStepToS(&player->yaw, yawTarget, 0x300);
++        player->actor.shape.rot.y = player->yaw;
++    }
++}
++
++// ---------------------------------------------------------------- quick save / quick load
++typedef struct {
++    Save save;
++    u8 eventInf[8];
++    CycleSceneFlags cycleSceneFlags[120];
++} QuickSnapshot;
++
++static QuickSnapshot* sSnap = nullptr;
++static bool sHaveSnap = false;
++static bool sPendingLoad = false;
++
++static bool CanQuickSave(PlayState* play) {
++    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return false;
++    if (gSaveContext.fileNum == 0xFF) return false;
++    if (IS_PAUSED(&play->pauseCtx) || (play->msgCtx.msgMode != MSGMODE_NONE)) return false;
++    if ((play->transitionTrigger != TRANS_TRIGGER_OFF) || (play->transitionMode != TRANS_MODE_OFF)) return false;
++    if (Play_InCsMode(play) || (gSaveContext.save.cutsceneIndex >= 0xFFF0)) return false;
++    if (gSaveContext.minigameStatus != MINIGAME_STATUS_END) return false;
++    if ((gSaveContext.timerStates[TIMER_ID_MINIGAME_1] != TIMER_STATE_OFF) ||
++        (gSaveContext.timerStates[TIMER_ID_MINIGAME_2] != TIMER_STATE_OFF)) {
++        return false;
++    }
++    if (play->gameOverCtx.state != GAMEOVER_INACTIVE) return false;
++    return true;
++}
++
++static void SaveToDisk(PlayState* play) {
++    if (!SavingEnhancements_CanSave()) return;
++    // Same steps 2 Ship's autosave uses: an owl-style save of the current area.
++    bool currentOwlSaveState = gSaveContext.save.isOwlSave;
++    gSaveContext.save.isOwlSave = true;
++    SavingEnhancements_PersistSaveEntranceInfo();
++    SavingEnhancements_AdvancePlaytime();
++    Play_SaveCycleSceneFlags(play);
++    gSaveContext.save.saveInfo.playerData.savedSceneId = play->sceneId;
++    func_8014546C(&play->sramCtx);
++    Sram_SetFlashPagesOwlSave(&play->sramCtx, gFlashOwlSaveStartPages[gSaveContext.fileNum * FLASH_SAVE_MAIN_MULTIPLIER],
++                              gFlashOwlSaveNumPages[gSaveContext.fileNum * FLASH_SAVE_MAIN_MULTIPLIER]);
++    Sram_StartWriteToFlashOwlSave(&play->sramCtx);
++    gSaveContext.save.isOwlSave = currentOwlSaveState;
++    SavingEnhancements_ClearSaveEntranceInfo();
++}
++
++static void QuickSave(PlayState* play) {
++    if (!CanQuickSave(play)) {
++        Audio_PlaySfx(NA_SE_SY_ERROR);
++        PostMessage("Can't quick save right now");
++        return;
++    }
++    if (sSnap == nullptr) sSnap = new QuickSnapshot();
++    Play_SaveCycleSceneFlags(play);
++    memcpy(&sSnap->save, &gSaveContext.save, sizeof(Save));
++    memcpy(sSnap->eventInf, gSaveContext.eventInf, sizeof(sSnap->eventInf));
++    memcpy(sSnap->cycleSceneFlags, gSaveContext.cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
++    sHaveSnap = true;
++    SaveToDisk(play);
++    Audio_PlaySfx(NA_SE_SY_DECIDE);
++    PostMessage("Quick saved");
++}
++
++static void QuickLoad(PlayState* play) {
++    if (!sHaveSnap) {
++        Audio_PlaySfx(NA_SE_SY_ERROR);
++        PostMessage("No quick save yet");
++        return;
++    }
++    if ((gSaveContext.gameMode != GAMEMODE_NORMAL) || IS_PAUSED(&play->pauseCtx) ||
++        (play->transitionTrigger != TRANS_TRIGGER_OFF) || (play->transitionMode != TRANS_MODE_OFF) ||
++        (play->gameOverCtx.state != GAMEOVER_INACTIVE)) {
++        Audio_PlaySfx(NA_SE_SY_ERROR);
++        PostMessage("Can't quick load right now");
++        return;
++    }
++    sPendingLoad = true;
++    gSaveContext.respawnFlag = 0;
++    gSaveContext.nextCutsceneIndex = 0;
++    play->nextEntrance = sSnap->save.entrance;
++    play->transitionTrigger = TRANS_TRIGGER_START;
++    play->transitionType = TRANS_TYPE_FADE_BLACK;
++    PostMessage("Quick loading...");
++}
++
++// Called at the start of Play_Init (z_play.c): apply a pending quick load before the area is built.
++extern "C" void MMMod_OnPlayInit(void) {
++    if (!sPendingLoad || !sHaveSnap) return;
++    sPendingLoad = false;
++    memcpy(&gSaveContext.save, &sSnap->save, sizeof(Save));
++    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
++    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
++}
++
++// ---------------------------------------------------------------- fast travel map (owl statues)
++static bool sFastTravelOpen = false;
++
++static bool CanOpenFastTravel(PlayState* play) {
++    Player* player = GET_PLAYER(play);
++    if (player == nullptr) return false;
++    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return false;
++    if (IS_PAUSED(&play->pauseCtx) || (play->gameOverCtx.state != GAMEOVER_INACTIVE)) return false;
++    if ((play->transitionTrigger != TRANS_TRIGGER_OFF) || (play->transitionMode != TRANS_MODE_OFF)) return false;
++    if (Play_InCsMode(play) || (play->msgCtx.msgMode != MSGMODE_NONE)) return false;
++    if (play->msgCtx.ocarinaMode != OCARINA_MODE_NONE) return false;
++    if (play->interfaceCtx.restrictions.songOfSoaring != 0) return false;
++    if (Map_CurRoomHasMapI(play) || (play->sceneId == SCENE_SECOM)) return false;
++    if (gSaveContext.save.saveInfo.playerData.owlActivationFlags == 0) return false;
++    if (!(player->actor.bgCheckFlags & BGCHECKFLAG_GROUND)) return false;
++    if (player->stateFlags1 & (PLAYER_STATE1_8000000 | PLAYER_STATE1_800000 | PLAYER_STATE1_CARRYING_ACTOR |
++                               PLAYER_STATE1_TALKING | PLAYER_STATE1_DEAD)) {
++        return false;
++    }
++    return true;
++}
++
++static void OpenOwlMap(PlayState* play) {
++    PauseContext* pauseCtx = &play->pauseCtx;
++    pauseCtx->unk_2C8 = pauseCtx->pageIndex;
++    pauseCtx->unk_2CA = pauseCtx->cursorPoint[4];
++    pauseCtx->pageIndex = PAUSE_ITEM;
++    pauseCtx->state = PAUSE_STATE_OWL_WARP_0;
++    func_800F4A10(play);
++    pauseCtx->pageIndex = PAUSE_MAP;
++    play->msgCtx.ocarinaMode = OCARINA_MODE_END;
++    gSaveContext.prevHudVisibility = HUD_VISIBILITY_A_B;
++    Interface_SetBButtonInterfaceDoAction(play, DO_ACTION_STOP);
++    GameState_SetFramerateDivisor(&play->state, 2);
++    if (ShrinkWindow_Letterbox_GetSizeTarget() != 0) {
++        ShrinkWindow_Letterbox_SetSizeTarget(0);
++    }
++    Audio_PlaySfx_PauseMenuOpenOrClose(1);
++    sFastTravelOpen = true;
++}
++
++static void FinishFastTravel(PlayState* play) {
++    Player* player = GET_PLAYER(play);
++    u16 mode = play->msgCtx.ocarinaMode;
++    sFastTravelOpen = false;
++    if ((mode >= OCARINA_MODE_WARP_TO_GREAT_BAY_COAST) && (mode <= OCARINA_MODE_WARP_TO_ENTRANCE) && (player != nullptr)) {
++        Actor* actor = Actor_Spawn(&play->actorCtx, play, ACTOR_EN_TEST7, player->actor.world.pos.x,
++                                   player->actor.world.pos.y, player->actor.world.pos.z, 0, 0, 0, mode);
++        if (actor != nullptr) {
++            player->stateFlags1 &= ~PLAYER_STATE1_20000000;
++            player->csAction = PLAYER_CSACTION_NONE;
++            Player_TryCsAction(play, NULL, PLAYER_CSACTION_19);
++            player->stateFlags1 |= PLAYER_STATE1_10000000 | PLAYER_STATE1_20000000;
++            return;
++        }
++    }
++    play->msgCtx.ocarinaMode = OCARINA_MODE_NONE;
++}
++
++// ---------------------------------------------------------------- tap to skip cutscenes
++static bool IsChoiceOrInputBox(MessageContext* msgCtx) {
++    switch (msgCtx->textboxEndType) {
++        case TEXTBOX_ENDTYPE_TWO_CHOICE:
++        case TEXTBOX_ENDTYPE_THREE_CHOICE:
++        case TEXTBOX_ENDTYPE_12:
++        case TEXTBOX_ENDTYPE_INPUT_BANK:
++        case TEXTBOX_ENDTYPE_INPUT_DOGGY_RACETRACK_BET:
++        case TEXTBOX_ENDTYPE_INPUT_BOMBER_CODE:
++        case TEXTBOX_ENDTYPE_INPUT_LOTTERY_CODE:
++        case TEXTBOX_ENDTYPE_64:
++            return true;
++        default:
++            return false;
++    }
++}
++
++static bool InCutscene(PlayState* play) {
++    return (play->csCtx.state != CS_STATE_IDLE) || (CutsceneManager_GetCurrentCsId() != CS_ID_NONE);
++}
++
++static bool BaseSkippable(PlayState* play) {
++    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return false;
++    if (IS_PAUSED(&play->pauseCtx)) return false;
++    if ((play->transitionTrigger != TRANS_TRIGGER_OFF) || (play->transitionMode != TRANS_MODE_OFF)) return false;
++    if (play->msgCtx.ocarinaMode != OCARINA_MODE_NONE) return false;
++    if ((play->msgCtx.msgMode != MSGMODE_NONE) && IsChoiceOrInputBox(&play->msgCtx)) return false;
++    return true;
++}
++
++static bool CanStartSkip(PlayState* play) {
++    Player* player = GET_PLAYER(play);
++    if (!BaseSkippable(play)) return false;
++    if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_TALKING)) return false;
++    if (play->csCtx.state != CS_STATE_IDLE) return true;
++    return (CutsceneManager_GetCurrentCsId() != CS_ID_NONE) && (play->msgCtx.msgMode == MSGMODE_NONE);
++}
++
++static bool sSkipping = false;
++static s32 sSkipBudget = 0;
++static u32 sSkipTick = 0;
++static s32 sSkipVisibleFrames = 0;
++
++static void RunSkip(PlayState* play) {
++    for (s32 i = 0; i < 90; i++) {
++        if (!play->state.running || !BaseSkippable(play) || !InCutscene(play) || (sSkipBudget-- <= 0)) {
++            sSkipping = false;
++            return;
++        }
++        Input* input = CONTROLLER1(&play->state);
++        u16 saved = input->press.button;
++        bool inject = (play->msgCtx.msgMode != MSGMODE_NONE) && ((sSkipTick++ & 1) == 0);
++        if (inject) input->press.button |= BTN_B; // advance cutscene text
++        Play_UpdateMain(play);
++        if (inject) input->press.button = saved;
++    }
++}
++
++// ---------------------------------------------------------------- per-frame (end of Play_Update, z_play.c)
++static s32 sLastStep = -1;
++
++extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
++    int bits = 0;
++    sFrameCounter++;
++
++    if (sFastTravelOpen && !IS_PAUSED(&play->pauseCtx)) FinishFastTravel(play);
++
++    if (TakeRequest(ACT_SPRINT)) SetSprint(!sSprintOn);
++    if (TakeRequest(ACT_TRAIL)) {
++        sTrailOn = !sTrailOn;
++        PostMessage(sTrailOn ? "Tatl's trail on" : "Tatl's trail off");
++    }
++    if (TakeRequest(ACT_QUICKSAVE)) QuickSave(play);
++    if (TakeRequest(ACT_QUICKLOAD)) QuickLoad(play);
++    if (TakeRequest(ACT_MAP)) {
++        if (CanOpenFastTravel(play)) {
++            OpenOwlMap(play);
++        } else {
++            Audio_PlaySfx(NA_SE_SY_ERROR);
++            PostMessage(gSaveContext.save.saveInfo.playerData.owlActivationFlags == 0
++                            ? "Hit an owl statue with your sword to unlock fast travel"
++                            : "Can't fast travel from here");
++        }
++    }
++
++    // Cutscene skipping
++    if (sSkipping) {
++        RunSkip(play);
++    } else if (CanStartSkip(play)) {
++        if (sSkipVisibleFrames < 8) sSkipVisibleFrames++; // ignore one-frame camera moments
++        if (TakeRequest(ACT_SKIP) && (sSkipVisibleFrames >= 8)) {
++            sSkipping = true;
++            sSkipBudget = 4000;
++        }
++    } else {
++        sSkipVisibleFrames = 0;
++        TakeRequest(ACT_SKIP);
++    }
++
++    // Quest tracker + Tatl trail
++    if (gSaveContext.gameMode == GAMEMODE_NORMAL) {
++        MMQuest_Update(play, sTrailOn);
++        s32 step = MMQuest_GetStep();
++        if (step != sLastStep) {
++            sLastStep = step;
++            s32 idx, count;
++            MMQuest_Progress(step, &idx, &count);
++            std::string t = std::string("Main quest \u00B7 ") + MMQuest_Chapter(step) + " \u00B7 " + std::to_string(idx) +
++                            "/" + std::to_string(count) + "\n" + MMQuest_Title(step) + "\n" + MMQuest_Text(step);
++            std::lock_guard<std::mutex> lock(sTextMutex);
++            sQuestText = t;
++        }
++    }
++
++    if (sSkipVisibleFrames >= 8 && !sSkipping) bits |= ST_CAN_SKIP;
++    if (sSkipping) bits |= ST_SKIPPING;
++    if (play->msgCtx.msgMode == MSGMODE_OCARINA_PLAYING) {
++        for (s32 i = 0; i < SONG_COUNT; i++) {
++            if (SongLearned(i)) {
++                bits |= ST_OCARINA;
++                break;
++            }
++        }
++    }
++    if ((gSaveContext.gameMode == GAMEMODE_NORMAL) && !IS_PAUSED(&play->pauseCtx) &&
++        (play->msgCtx.msgMode == MSGMODE_NONE) && !InCutscene(play) && !Play_InCsMode(play)) {
++        bits |= ST_SHOW_QUEST;
++    }
++    if (sSprintOn) bits |= ST_SPRINT;
++    if (sTrailOn) bits |= ST_TRAIL;
++    sStateBits = bits;
++}
++
++// ---------------------------------------------------------------- defaults (applied once)
 +static void ApplyPresetOnce() {
 +    if (CVarGetInteger(CVAR_PRESET_VERSION, 0) >= 1) return;
 +    CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
@@ -701,8 +2516,12 @@ index 0000000..95e992d
 +
 +static RegisterShipInitFunc initFunc(RegisterMMTouch, {});
 +
-+// ---------------------------------------------------------------- JNI entry points (MainActivity / ModTouchOverlay)
++// ---------------------------------------------------------------- JNI (MainActivity / ModTouchOverlay)
 +#ifdef __ANDROID__
++static jstring MakeJString(JNIEnv* env, const std::string& s) {
++    return env->NewStringUTF(s.c_str());
++}
++
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetN64Button(JNIEnv*, jobject, jint mask,
 +                                                                                           jboolean down) {
 +    if (down) {
@@ -718,30 +2537,51 @@ index 0000000..95e992d
 +    if (!active) gMmTouchN64Buttons = 0;
 +}
 +
-+// action: 1 = jump, 2 = toggle sprint. Returns the sprint state.
-+extern "C" JNIEXPORT jboolean JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmAction(JNIEnv*, jobject,
-+                                                                                          jint action) {
-+    if (action == 1) {
-+        sJumpRequested = true;
-+    } else if (action == 2) {
-+        SetSprint(!sSprintOn);
-+    }
-+    return sSprintOn ? JNI_TRUE : JNI_FALSE;
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmAction(JNIEnv*, jobject, jint action) {
++    if ((action > 0) && (action < 31)) sRequestMask.fetch_or(1 << action);
 +}
 +
-+extern "C" JNIEXPORT jboolean JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSprintOn(JNIEnv*, jobject) {
-+    return sSprintOn ? JNI_TRUE : JNI_FALSE;
++// Low byte..: state bits; upper 32 bits: frame counter (lets the overlay notice when gameplay isn't running)
++extern "C" JNIEXPORT jlong JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetState(JNIEnv*, jobject) {
++    return ((jlong)(unsigned)sFrameCounter.load() << 32) | (jlong)(unsigned)sStateBits.load();
++}
++
++extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetQuest(JNIEnv* env, jobject) {
++    std::lock_guard<std::mutex> lock(sTextMutex);
++    return MakeJString(env, sQuestText);
++}
++
++extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmPollMessage(JNIEnv* env, jobject) {
++    std::lock_guard<std::mutex> lock(sTextMutex);
++    std::string m = sMessage;
++    sMessage.clear();
++    return MakeJString(env, m);
++}
++
++// "index:name" entries separated by '\n' for songs the player has learned
++extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetSongs(JNIEnv* env, jobject) {
++    std::string out;
++    for (s32 i = 0; i < SONG_COUNT; i++) {
++        if (SongLearned(i)) {
++            out += std::to_string(i) + ":" + sAllSongs[i].name + "\n";
++        }
++    }
++    return MakeJString(env, out);
++}
++
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmPlaySong(JNIEnv*, jobject, jint index) {
++    sSongRequest = index;
 +}
 +#endif
 diff --git a/mm/src/code/padmgr.c b/mm/src/code/padmgr.c
-index f0e57da..972fb45 100644
+index f0e57da..9b9d94f 100644
 --- a/mm/src/code/padmgr.c
 +++ b/mm/src/code/padmgr.c
 @@ -441,6 +441,9 @@ void PadMgr_AdjustInput(Input* input) {
  /**
   * Updates `sPadMgrInstance->inputs` based on the error response of each controller
   */
-+extern volatile u32 gMmTouchN64Buttons;
++u32 MMMod_TouchButtons(void);
 +extern volatile s32 gMmTouchOverlayActive;
 +
  void PadMgr_UpdateInputs(void) {
@@ -755,9 +2595,68 @@ index f0e57da..972fb45 100644
 +        // stick is the camera, so C-buttons only come from the overlay's item buttons.
 +        if ((i == 0) && gMmTouchOverlayActive) {
 +            input->cur.button &= ~(BTN_CUP | BTN_CDOWN | BTN_CLEFT | BTN_CRIGHT);
-+            input->cur.button |= gMmTouchN64Buttons;
++            input->cur.button |= MMMod_TouchButtons();
 +        }
 +
          // If opposed directions on the D-Pad are pressed at the same time, mask both out
          if ((input->cur.button & (BTN_DDOWN | BTN_DUP)) == (BTN_DDOWN | BTN_DUP)) {
              input->cur.button &= ~(BTN_DDOWN | BTN_DUP);
+diff --git a/mm/src/code/z_play.c b/mm/src/code/z_play.c
+index fa46547..56deddc 100644
+--- a/mm/src/code/z_play.c
++++ b/mm/src/code/z_play.c
+@@ -1110,6 +1110,9 @@ void Play_UpdateMain(PlayState* this) {
+     }
+ }
+ 
++void MMMod_AfterPlayUpdate(PlayState* play);
++void MMMod_OnPlayInit(void);
++
+ void Play_Update(PlayState* this) {
+     if (!sBombersNotebookOpen) {
+         if (this->pauseCtx.bombersNotebookOpen) {
+@@ -1137,6 +1140,7 @@ void Play_Update(PlayState* this) {
+         Message_Update(this);
+     } else {
+         Play_UpdateMain(this);
++        MMMod_AfterPlayUpdate(this); // Majora's Mask touch mod
+     }
+ }
+ 
+@@ -2226,6 +2230,8 @@ void Play_Init(GameState* thisx) {
+     u8 sceneLayer;
+     s32 pad2;
+ 
++    MMMod_OnPlayInit(); // Majora's Mask touch mod: apply a pending quick load
++
+     if ((gSaveContext.respawnFlag == -4) || (gSaveContext.respawnFlag == -0x63)) {
+         if (CHECK_EVENTINF(EVENTINF_TRIGGER_DAYTELOP)) {
+             CLEAR_EVENTINF(EVENTINF_TRIGGER_DAYTELOP);
+diff --git a/mm/src/overlays/actors/ovl_player_actor/z_player.c b/mm/src/overlays/actors/ovl_player_actor/z_player.c
+index 2e947e0..7bcd6c4 100644
+--- a/mm/src/overlays/actors/ovl_player_actor/z_player.c
++++ b/mm/src/overlays/actors/ovl_player_actor/z_player.c
+@@ -17514,6 +17514,9 @@ void Player_Action_58(Player* this, PlayState* play) {
+     }
+ }
+ 
++s32 MMMod_LongDive(void);
++void MMMod_DiveSteer(Player* player, PlayState* play);
++
+ void Player_Action_59(Player* this, PlayState* play) {
+     this->stateFlags2 |= PLAYER_STATE2_20;
+ 
+@@ -17542,9 +17545,12 @@ void Player_Action_59(Player* this, PlayState* play) {
+             func_808477D0(play, this, sPlayerControlInput, this->actor.velocity.y);
+             this->unk_AAA = 0x3E80;
+ 
++            // Majora's Mask touch mod: holding A keeps a dive going with no depth limit, steered with the stick
+             if (CHECK_BTN_ALL(sPlayerControlInput->cur.button, BTN_A) && !Player_ActionHandler_2(this, play) &&
+-                !(this->actor.bgCheckFlags & BGCHECKFLAG_GROUND) && (this->actor.depthInWater < 120.0f)) {
++                (!(this->actor.bgCheckFlags & BGCHECKFLAG_GROUND) || MMMod_LongDive()) &&
++                ((this->actor.depthInWater < 120.0f) || MMMod_LongDive())) {
+                 func_808481CC(play, this, -2.0f);
++                MMMod_DiveSteer(this, play);
+             } else {
+                 this->av1.actionVar1++;
+                 Player_Anim_PlayLoopSlowMorph(play, this, &gPlayerAnim_link_swimer_swim_wait);
