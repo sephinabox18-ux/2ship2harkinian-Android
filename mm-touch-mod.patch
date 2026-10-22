@@ -41,10 +41,10 @@ index fe546c8..c3ea69c 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..0fc81d6
+index 0000000..649b2ac
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,958 @@
+@@ -0,0 +1,1086 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -84,7 +84,7 @@ index 0000000..0fc81d6
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32;
 +
-+    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4;
++    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -128,6 +128,12 @@ index 0000000..0fc81d6
 +    private long camLastT;
 +    // Adaptive camera: learns how fast you usually swipe and scales the camera to match
 +    private float typicalSwipe;   // dp per second of a normal swipe, learned over time
++    // Touch settings (Touch settings panel in the tray)
++    private float camSens, stickSens;
++    private boolean fixedStick;
++    private LinearLayout settingsPanel;
++    private TextView camSensLabel, stickSensLabel, stickTypeLabel, camTypeLabel;
++    private Ctl fixedStickCtl;
 +    private float gesturePeak;    // fastest speed seen in the current swipe
 +    private long lastCamMoveWall;
 +    private float stickX0, stickY0, camX0, camY0;
@@ -156,6 +162,9 @@ index 0000000..0fc81d6
 +        questPanelOn = prefs.getBoolean("questPanel", true);
 +        swipeCamera = prefs.getBoolean("swipeCamera", true);
 +        typicalSwipe = prefs.getFloat("typicalSwipe", 900f);
++        camSens = prefs.getFloat("camSens", 1.0f);
++        stickSens = prefs.getFloat("stickSens", 1.0f);
++        fixedStick = prefs.getBoolean("fixedStick", false);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -164,17 +173,17 @@ index 0000000..0fc81d6
 +        ctls.add(new Ctl("cleft", "\u25C0", "", KIND_N64, N64_CLEFT, STYLE_C, 0.750f, 0.330f, 58));
 +        ctls.add(new Ctl("cdown", "\u25BC", "", KIND_N64, N64_CDOWN, STYLE_C, 0.835f, 0.250f, 58));
 +        ctls.add(new Ctl("cright", "\u25B6", "", KIND_N64, N64_CRIGHT, STYLE_C, 0.920f, 0.330f, 58));
++        ctls.add(new Ctl("cup", "\u25B2", "Tatl", KIND_N64, N64_CUP, STYLE_C, 0.835f, 0.100f, 50));
 +        ctls.add(new Ctl("target", "Z", "Target", KIND_N64, N64_Z, STYLE_PLAIN, 0.070f, 0.360f, 64));
 +        sprintCtl = new Ctl("sprint", "\u00BB", "Sprint", KIND_ACTION, ACT_SPRINT, STYLE_PLAIN, 0.160f, 0.300f, 50);
 +        ctls.add(sprintCtl);
 +        ctls.add(new Ctl("more", "\u2022\u2022\u2022", "", KIND_TRAY, 0, STYLE_START, 0.700f, 0.075f, 44));
 +        // Optional buttons: hidden until you show them in Edit controls (double-tap)
-+        Ctl start = new Ctl("start", "START", "", KIND_N64, N64_START, STYLE_START, 0.640f, 0.075f, 50);
-+        start.defHidden = true;
-+        ctls.add(start);
-+        Ctl map = new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50);
-+        map.defHidden = true;
-+        ctls.add(map);
++        ctls.add(new Ctl("start", "START", "", KIND_N64, N64_START, STYLE_START, 0.640f, 0.075f, 50));
++        ctls.add(new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50));
++        // Where the stick sits in Fixed mode (only shown in Fixed mode; move/resize it in Edit controls)
++        fixedStickCtl = new Ctl("fixedstick", "", "", KIND_STICK, 0, STYLE_PLAIN, 0.150f, 0.700f, 120);
++        ctls.add(fixedStickCtl);
 +        skipCtl = new Ctl("skip", "Skip \u25B6\u25B6", "", KIND_SKIP, ACT_SKIP, STYLE_PLAIN, 0.500f, 0.860f, 64);
 +        ctls.add(skipCtl);
 +        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
@@ -205,12 +214,16 @@ index 0000000..0fc81d6
 +        stickBase.setVisibility(View.GONE);
 +        stickKnob.setVisibility(View.GONE);
 +
++        if (prefs.getInt("layoutVersion", 1) < 2) {
++            prefs.edit().remove("ctl_start").remove("ctl_map").putInt("layoutVersion", 2).apply();
++        }
 +        for (Ctl c : ctls) {
 +            loadCtl(c);
 +            if (c.kind == KIND_PANEL) buildQuestPanel(c);
 +            else buildCtl(c);
 +        }
 +        buildSongsPanel();
++        buildSettingsPanel();
 +        buildTray();
 +        buildEditBar();
 +        buildToast();
@@ -328,6 +341,7 @@ index 0000000..0fc81d6
 +            for (Ctl c : ctls) c.view.setVisibility(View.GONE);
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
++            settingsPanel.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
 +            closeMenuBtn.setVisibility(View.VISIBLE);
 +        } else {
@@ -396,6 +410,7 @@ index 0000000..0fc81d6
 +        } else {
 +            v.setBackground(styleFor(c.style, false));
 +        }
++        if (c.kind == KIND_STICK) v.setBackground(discDrawable(Color.argb(35, 255, 255, 255), GOLD_SOFT, 2));
 +        TextView t = hudText(14);
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
@@ -478,6 +493,103 @@ index 0000000..0fc81d6
 +        }
 +    }
 +
++    private TextView settingsRow(LinearLayout parent, String name, String minus, Runnable onMinus, String plus, Runnable onPlus) {
++        LinearLayout row = new LinearLayout(act);
++        row.setOrientation(LinearLayout.HORIZONTAL);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        TextView title = new TextView(act);
++        title.setText(name);
++        title.setTextColor(Color.WHITE);
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        title.setTypeface(Typeface.DEFAULT_BOLD);
++        title.setPadding(dp(4), dp(8), dp(12), dp(8));
++        row.addView(title, new LinearLayout.LayoutParams(dp(180), ViewGroup.LayoutParams.WRAP_CONTENT));
++        TextView value = new TextView(act);
++        value.setTextColor(GOLD);
++        value.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
++        value.setTypeface(Typeface.DEFAULT_BOLD);
++        value.setGravity(Gravity.CENTER);
++        if (minus != null) row.addView(editButton(minus, v -> { onMinus.run(); touched(); }));
++        row.addView(value, new LinearLayout.LayoutParams(dp(minus != null ? 70 : 120), ViewGroup.LayoutParams.WRAP_CONTENT));
++        row.addView(editButton(plus, v -> { onPlus.run(); touched(); }));
++        parent.addView(row);
++        return value;
++    }
++
++    private void buildSettingsPanel() {
++        settingsPanel = new LinearLayout(act);
++        settingsPanel.setOrientation(LinearLayout.VERTICAL);
++        settingsPanel.setPadding(dp(16), dp(10), dp(16), dp(12));
++        settingsPanel.setBackground(panelDrawable());
++        TextView title = new TextView(act);
++        title.setText("Touch settings");
++        title.setTextColor(GOLD);
++        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
++        title.setPadding(dp(4), 0, 0, dp(6));
++        settingsPanel.addView(title);
++
++        camSensLabel = settingsRow(settingsPanel, "Camera sensitivity", "\u2212", () -> setCamSens(camSens - 0.1f),
++                "+", () -> setCamSens(camSens + 0.1f));
++        camTypeLabel = settingsRow(settingsPanel, "Camera style", null, null, "Change", () -> {
++            swipeCamera = !swipeCamera;
++            prefs.edit().putBoolean("swipeCamera", swipeCamera).apply();
++            refreshSettings();
++        });
++        stickSensLabel = settingsRow(settingsPanel, "Stick sensitivity", "\u2212", () -> setStickSens(stickSens - 0.1f),
++                "+", () -> setStickSens(stickSens + 0.1f));
++        stickTypeLabel = settingsRow(settingsPanel, "Stick type", null, null, "Change", () -> {
++            fixedStick = !fixedStick;
++            prefs.edit().putBoolean("fixedStick", fixedStick).apply();
++            refreshSettings();
++            layoutAll();
++        });
++
++        LinearLayout bottom = new LinearLayout(act);
++        bottom.setOrientation(LinearLayout.HORIZONTAL);
++        bottom.addView(editButton("Reset camera learning", v -> {
++            typicalSwipe = 900f;
++            prefs.edit().putFloat("typicalSwipe", typicalSwipe).apply();
++            showToast("Camera learning reset");
++        }));
++        bottom.addView(editButton("Close", v -> showSettings(false)));
++        settingsPanel.addView(bottom);
++        settingsPanel.setVisibility(View.GONE);
++
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.CENTER;
++        root.addView(settingsPanel, lp);
++        refreshSettings();
++    }
++
++    private void showSettings(boolean show) {
++        settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (show) {
++            releaseAll();
++            refreshSettings();
++        }
++    }
++
++    private void setCamSens(float v) {
++        camSens = Math.max(0.3f, Math.min(3.0f, Math.round(v * 10f) / 10f));
++        prefs.edit().putFloat("camSens", camSens).apply();
++        refreshSettings();
++    }
++
++    private void setStickSens(float v) {
++        stickSens = Math.max(0.5f, Math.min(2.0f, Math.round(v * 10f) / 10f));
++        prefs.edit().putFloat("stickSens", stickSens).apply();
++        refreshSettings();
++    }
++
++    private void refreshSettings() {
++        if (camSensLabel == null) return;
++        camSensLabel.setText(String.format(java.util.Locale.US, "%.1f\u00D7", camSens));
++        stickSensLabel.setText(String.format(java.util.Locale.US, "%.1f\u00D7", stickSens));
++        camTypeLabel.setText(swipeCamera ? "Swipe" : "Stick");
++        stickTypeLabel.setText(fixedStick ? "Fixed" : "Dynamic");
++    }
++
 +    private void buildTray() {
 +        tray = new LinearLayout(act);
 +        tray.setOrientation(LinearLayout.VERTICAL);
@@ -503,11 +615,7 @@ index 0000000..0fc81d6
 +        row2.addView(trayItem("Tatl", v -> tapN64(N64_CUP), true));
 +        row2.addView(trayItem("Minimap", v -> tapN64(N64_L), true));
 +        row2.addView(trayItem("2 Ship menu", v -> act.nativeGamepadBackPressed(), true));
-+        row2.addView(trayItem(swipeCamera ? "Camera: swipe" : "Camera: stick", v -> {
-+            swipeCamera = !swipeCamera;
-+            prefs.edit().putBoolean("swipeCamera", swipeCamera).apply();
-+            ((TextView) v).setText(swipeCamera ? "Camera: swipe" : "Camera: stick");
-+        }, false));
++        row2.addView(trayItem("Touch settings", v -> showSettings(true), true));
 +        row2.addView(trayItem("Edit controls", v -> setEditing(true), true));
 +        row2.addView(trayItem("Hide controls", v -> {
 +            controlsHidden = !controlsHidden;
@@ -632,6 +740,11 @@ index 0000000..0fc81d6
 +            float ratio = c.kind == KIND_SKIP ? 0.30f
 +                    : (c.sub.isEmpty() ? (c.label.length() > 3 ? 0.22f : (c.style == STYLE_C ? 0.36f : 0.42f)) : 0.24f);
 +            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
++            if (c.kind == KIND_STICK) {
++                c.view.setVisibility(fixedStick && !menuMode ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(1f);
++                continue;
++            }
 +            if (c.kind != KIND_SKIP) {
 +                boolean show = !c.hidden || editing;
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -686,7 +799,9 @@ index 0000000..0fc81d6
 +        if (on) {
 +            controlsHidden = false;
 +            releaseAll();
-+            for (Ctl c : ctls) c.view.setVisibility(View.VISIBLE);
++            for (Ctl c : ctls) {
++                if (c.kind != KIND_STICK) c.view.setVisibility(View.VISIBLE);
++            }
 +        } else {
 +            saveAll();
 +            for (Ctl c : ctls) c.view.setAlpha(1f);
@@ -726,6 +841,7 @@ index 0000000..0fc81d6
 +    private boolean onCtlTouch(Ctl c, MotionEvent e) {
 +        touched();
 +        if (editing) return onCtlEdit(c, e);
++        if (c.kind == KIND_STICK) return false; // let the stick area underneath handle it
 +        if (controlsHidden && c.kind != KIND_TRAY) return false;
 +
 +        switch (e.getActionMasked()) {
@@ -820,9 +936,14 @@ index 0000000..0fc81d6
 +            case MotionEvent.ACTION_POINTER_DOWN:
 +                if (stickPointer == -1) {
 +                    stickPointer = e.getPointerId(idx);
-+                    stickX0 = e.getX(idx);
-+                    stickY0 = e.getY(idx);
-+                    clampStickOrigin();
++                    if (fixedStick) {
++                        stickX0 = fixedStickCtl.x * root.getWidth();
++                        stickY0 = fixedStickCtl.y * root.getHeight();
++                    } else {
++                        stickX0 = e.getX(idx);
++                        stickY0 = e.getY(idx);
++                        clampStickOrigin();
++                    }
 +                    long now = System.currentTimeMillis();
 +                    if (now - lastStickDown < 300) act.nativeMmAction(ACT_SPRINT);
 +                    lastStickDown = now;
@@ -851,10 +972,14 @@ index 0000000..0fc81d6
 +    }
 +
 +    private void updateStick(float tx, float ty) {
-+        float max = dp(STICK_RADIUS_DP);
++        float max = fixedStick ? dp(fixedStickCtl.size) / 2f : dp(STICK_RADIUS_DP);
 +        float dx = tx - stickX0, dy = ty - stickY0;
 +        float d = (float) Math.sqrt(dx * dx + dy * dy);
-+        if (d > max) {
++        if (fixedStick && d > max) {
++            dx = dx / d * max;
++            dy = dy / d * max;
++            d = max;
++        } else if (d > max) {
 +            // drag the stick along with the thumb
 +            stickX0 = tx - dx / d * max;
 +            stickY0 = ty - dy / d * max;
@@ -866,6 +991,7 @@ index 0000000..0fc81d6
 +        }
 +        float mag = d / max;
 +        float out = mag < STICK_DEADZONE ? 0f : (mag - STICK_DEADZONE) / (1f - STICK_DEADZONE);
++        out = Math.min(1f, out * stickSens); // higher sensitivity = full speed with less thumb travel
 +        float nx = d > 0 ? dx / d * out : 0, ny = d > 0 ? dy / d * out : 0;
 +        act.setAxis(ControllerButtons.AXIS_LX, (short) (nx * Short.MAX_VALUE));
 +        act.setAxis(ControllerButtons.AXIS_LY, (short) (ny * Short.MAX_VALUE));
@@ -873,7 +999,7 @@ index 0000000..0fc81d6
 +    }
 +
 +    private void placeStick(float bx, float by, float kx, float ky) {
-+        stickBase.setVisibility(View.VISIBLE);
++        stickBase.setVisibility(fixedStick ? View.GONE : View.VISIBLE); // fixed mode draws its own ring
 +        stickKnob.setVisibility(View.VISIBLE);
 +        stickBase.setAlpha(opacity * 0.8f);
 +        stickKnob.setAlpha(opacity);
@@ -910,6 +1036,8 @@ index 0000000..0fc81d6
 +    }
 +
 +    private void sendCam(float nx, float ny) {
++        nx *= camSens;
++        ny *= camSens;
 +        nx = Math.max(-1f, Math.min(1f, nx));
 +        ny = Math.max(-1f, Math.min(1f, ny));
 +        act.setAxis(ControllerButtons.AXIS_RX, (short) (nx * Short.MAX_VALUE));
@@ -2181,10 +2309,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..6e5147d
+index 0000000..47f7868
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,588 @@
+@@ -0,0 +1,582 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -2356,13 +2484,7 @@ index 0000000..6e5147d
 +        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump,
 +                      CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f), gPlayState);
 +    }
-+    if (sSprintOn && player != nullptr) {
-+        if (player->speedXZ < 0.5f) {
-+            if (++sStoppedFrames > 8) SetSprint(false);
-+        } else {
-+            sStoppedFrames = 0;
-+        }
-+    }
++    // Sprint stays on until you turn it off yourself.
 +}
 +
 +// ---------------------------------------------------------------- unlimited diving (called from z_player.c)
