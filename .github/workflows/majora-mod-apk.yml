@@ -1,0 +1,112 @@
+name: Majora Mod APK
+# Builds the Android APK with the Majora's Mask touch mod (mm-touch-mod.patch) applied.
+on:
+  workflow_dispatch:
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - name: Apply Majora's Mask mod
+        run: git apply --whitespace=nowarn mm-touch-mod.patch
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y $(cat .github/workflows/apt-deps.txt) libzip-dev zipcmp zipmerge ziptool file
+
+      - name: Install latest SDL
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "SDL2-2.28.5" ]; then
+            wget https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-2.28.5.tar.gz
+            tar -xzf SDL2-2.28.5.tar.gz
+          fi
+          cd SDL2-2.28.5
+          ./configure --enable-hidapi-libusb
+          make -j 10
+          sudo make install
+          sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
+
+      - name: Install latest tinyxml2
+        run: |
+          sudo apt-get remove -y libtinyxml2-dev
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          if [ ! -d "tinyxml2-10.0.0" ]; then
+            wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
+            tar -xzf 10.0.0.tar.gz
+          fi
+          cd tinyxml2-10.0.0
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+          sudo make install
+
+      - name: Generate bundled support archive
+        run: |
+          export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
+          cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release
+          cmake --build build-cmake --config Release --target Generate2ShipOtr -j3
+
+      - name: Bundle generated support archive
+        run: |
+          support_archive=""
+          for candidate in 2ship.o2r build-cmake/mm/2ship.o2r build-cmake/2ship.o2r; do
+            if [ -f "$candidate" ]; then
+              support_archive="$candidate"
+              break
+            fi
+          done
+          if [ -z "$support_archive" ]; then
+            echo "Generated 2ship.o2r support archive was not found."
+            find . -name '2ship.o2r' -print
+            exit 1
+          fi
+          mkdir -p Android/app/src/main/assets
+          cp "$support_archive" Android/app/src/main/assets/2ship.o2r
+          ls -lh Android/app/src/main/assets/2ship.o2r
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android build tools
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.0.10792818" "cmake;3.30.3"
+
+      - name: Install Android vcpkg dependencies
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/build/vcpkg
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/26.0.10792818"
+          export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
+          mkdir -p build
+          if [ ! -d "$VCPKG_ROOT" ]; then
+            git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT" --depth 1
+          fi
+          "$VCPKG_ROOT/bootstrap-vcpkg.sh"
+          "$VCPKG_ROOT/vcpkg" install --triplet arm64-android zlib libpng libogg libvorbis opus opusfile
+
+      - name: Prepare signing key
+        run: echo "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" | base64 --decode > Android/app/release-keystore.jks
+
+      - name: Build release APK
+        working-directory: Android
+        env:
+          VCPKG_ROOT: ${{ github.workspace }}/build/vcpkg
+          ANDROID_KEYSTORE_PATH: release-keystore.jks
+          ANDROID_KEYSTORE_PASSWORD: majoramod
+          ANDROID_KEY_ALIAS: majoramod
+          ANDROID_KEY_PASSWORD: majoramod
+        run: ./gradlew :app:assembleRelease -PtwoShipApplicationId=com.twoshipfork.mm.majoramod
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Majora-Mod-APK
+          path: Android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
