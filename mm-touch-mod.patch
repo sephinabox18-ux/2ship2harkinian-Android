@@ -1,9 +1,148 @@
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/CrashExport.java b/Android/app/src/main/java/com/twoshipfork/mm/CrashExport.java
+new file mode 100644
+index 0000000..b6c94da
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/CrashExport.java
+@@ -0,0 +1,133 @@
++package com.twoshipfork.mm;
++
++import android.content.ContentValues;
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.os.Build;
++import android.os.Environment;
++import android.provider.MediaStore;
++import android.util.Log;
++import android.widget.Toast;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.OutputStream;
++import java.nio.charset.StandardCharsets;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
++/**
++ * After a crash, 2 Ship writes its reports into the app's own folder, which the Files app often can't see.
++ * On the next launch this copies any new report (plus the mod's breadcrumbs) into Downloads as one text file.
++ */
++final class CrashExport {
++    private static final String PREFS = "com.twoshipfork.mm.crashexport";
++    private static final String[] REPORTS = { "2ship-last-exit.txt", "2ship-java-crash.txt", "2ship-native-crash.txt" };
++
++    private CrashExport() {
++    }
++
++    static void runInBackground(MainActivity act) {
++        new Thread(() -> {
++            try {
++                run(act);
++            } catch (Throwable t) {
++                Log.e("MMTouch", "crash export", t);
++            }
++        }, "mm-crash-export").start();
++    }
++
++    private static void run(MainActivity act) throws Exception {
++        File dir = AndroidCrashReporter.getNativeReportFile().getParentFile();
++        if (dir == null) return;
++        SharedPreferences prefs = act.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++        long lastExported = prefs.getLong("lastExported", 0L);
++
++        StringBuilder out = new StringBuilder();
++        long newest = lastExported;
++        for (String name : REPORTS) {
++            File f = new File(dir, name);
++            if (f.exists() && f.lastModified() > lastExported) {
++                out.append("===== ").append(name).append(" =====\n").append(readText(f, 200_000)).append("\n\n");
++                newest = Math.max(newest, f.lastModified());
++            }
++        }
++        File trace = new File(dir, "2ship-last-exit-trace.bin");
++        if (out.length() > 0 && trace.exists() && trace.lastModified() > lastExported) {
++            out.append("===== native trace (readable parts) =====\n").append(printableStrings(trace, 300_000)).append("\n\n");
++        }
++        if (out.length() == 0) return; // nothing new
++
++        String crumbsPath = act.nativeMmGetBreadcrumbPath();
++        if (crumbsPath != null) {
++            File crumbs = new File(crumbsPath);
++            if (crumbs.exists()) out.append("===== mod breadcrumbs =====\n").append(readText(crumbs, 50_000)).append('\n');
++        }
++
++        String fileName = "MajoraMod-crash-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date()) + ".txt";
++        boolean saved = writeToDownloads(act, fileName, out.toString());
++        prefs.edit().putLong("lastExported", newest).apply();
++        String msg = saved ? "Crash report saved to Downloads: " + fileName : "Crash report saved in the game folder";
++        act.runOnUiThread(() -> Toast.makeText(act, msg, Toast.LENGTH_LONG).show());
++    }
++
++    private static boolean writeToDownloads(Context ctx, String name, String text) {
++        try {
++            byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
++                ContentValues values = new ContentValues();
++                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
++                values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
++                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
++                Uri uri = ctx.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
++                if (uri == null) return false;
++                try (OutputStream os = ctx.getContentResolver().openOutputStream(uri)) {
++                    if (os == null) return false;
++                    os.write(bytes);
++                }
++                return true;
++            }
++            File dl = ctx.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
++            if (dl == null) return false;
++            try (OutputStream os = new java.io.FileOutputStream(new File(dl, name))) {
++                os.write(bytes);
++            }
++            return false;
++        } catch (Exception e) {
++            Log.e("MMTouch", "write crash report", e);
++            return false;
++        }
++    }
++
++    private static String readText(File f, int max) {
++        try (FileInputStream in = new FileInputStream(f)) {
++            byte[] buf = new byte[(int) Math.min(max, f.length())];
++            int n = in.read(buf);
++            return n > 0 ? new String(buf, 0, n, StandardCharsets.UTF_8) : "";
++        } catch (Exception e) {
++            return "(could not read " + f.getName() + ")";
++        }
++    }
++
++    // The trace file is binary; keep the readable text in it (function names, addresses, messages).
++    private static String printableStrings(File f, int max) {
++        StringBuilder sb = new StringBuilder();
++        StringBuilder run = new StringBuilder();
++        try (FileInputStream in = new FileInputStream(f)) {
++            int b;
++            while ((b = in.read()) != -1 && sb.length() < max) {
++                if (b >= 32 && b < 127) {
++                    run.append((char) b);
++                } else {
++                    if (run.length() >= 6) sb.append(run).append('\n');
++                    run.setLength(0);
++                }
++            }
++        } catch (Exception e) {
++            sb.append("(could not read trace)");
++        }
++        return sb.toString();
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..7c2bb39
+index 0000000..f0286f5
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,210 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -130,8 +269,9 @@ index 0000000..7c2bb39
 +            if (fill >= 16) {
 +                c.drawPath(heart, heartFill);
 +            } else if (fill > 0) {
-+                // Health is stored in 1/16ths; the game shows it in quarters. Fill a pie slice from the top.
-+                int quarters = Math.max(1, (fill + 3) / 4);
++                // Health is stored in 1/16ths of a heart. Use the game's own rounding (z_lifemeter.c):
++                // 1-5 = quarter, 6-10 = half, 11-15 = three quarters. Fill a pie slice from the top.
++                int quarters = fill <= 5 ? 1 : (fill <= 10 ? 2 : 3);
 +                wedge.reset();
 +                wedge.moveTo(cx, cy);
 +                arc.set(cx - hs * 2, cy - hs * 2, cx + hs * 2, cy + hs * 2);
@@ -214,10 +354,10 @@ index 0000000..7c2bb39
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..5e2d13b 100644
+index fe546c8..638daaa 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-@@ -103,6 +103,14 @@ public class MainActivity extends SDLActivity{
+@@ -103,6 +103,15 @@ public class MainActivity extends SDLActivity{
          }
  
          setupControllerOverlay();
@@ -225,6 +365,7 @@ index fe546c8..5e2d13b 100644
 +        try {
 +            modTouchOverlay = new ModTouchOverlay(this);
 +            modTouchOverlay.attach();
++            CrashExport.runInBackground(this); // copies any new crash report to Downloads
 +        } catch (Throwable t) {
 +            android.util.Log.e("MMTouch", "Touch overlay failed, using the stock controls", t);
 +            modTouchOverlay = null;
@@ -232,7 +373,7 @@ index fe546c8..5e2d13b 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +963,24 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +964,25 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -252,12 +393,13 @@ index fe546c8..5e2d13b 100644
 +    public native void nativeMmSetOption(int option, int value);
 +    public native int[] nativeMmGetHud();
 +    public native int[] nativeMmGetPauseInfo();
++    public native String nativeMmGetBreadcrumbPath();
 +    public native void nativeMmSetMinimap(int visible, int x, int y, int scale);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +988,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +990,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -269,10 +411,10 @@ index fe546c8..5e2d13b 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..18ebdb5
+index 0000000..3d3cc49
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1761 @@
+@@ -0,0 +1,1883 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -316,7 +458,7 @@ index 0000000..18ebdb5
 +            ACT_TRAIL = 7;
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
-+            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256;
++            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
 +            KIND_HUD = 6, KIND_MINIMAP = 7;
@@ -459,6 +601,8 @@ index 0000000..18ebdb5
 +    private int stickPointer = -1, camPointer = -1;
 +    // Swipe camera: camera turns with finger speed (stops when the finger stops), smoothed for high touch rates
 +    private boolean swipeCamera;
++    private float aimSens;          // camera speed while aiming in first person (bow, hookshot...)
++    private TextView aimSensLabel;
 +    private float camLastX, camLastY, camVx, camVy;
 +    private long camLastT;
 +    // Adaptive camera: learns how fast you usually swipe and scales the camera to match
@@ -501,10 +645,12 @@ index 0000000..18ebdb5
 +        swipeCamera = prefs.getBoolean("swipeCamera", true);
 +        typicalSwipe = prefs.getFloat("typicalSwipe", 900f);
 +        camSens = prefs.getFloat("camSens", 1.0f);
++        aimSens = prefs.getFloat("aimSens", 0.35f);
 +        stickSens = prefs.getFloat("stickSens", 1.0f);
 +        fixedStick = prefs.getBoolean("fixedStick", false);
 +        touchOnlyPause = prefs.getBoolean("touchOnlyPause", true);
 +        modernHud = prefs.getBoolean("modernHud", true);
++        instantDoors = prefs.getBoolean("instantDoors", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -587,6 +733,7 @@ index 0000000..18ebdb5
 +        act.nativeMmSetOverlayActive(true);
 +        act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
 +        act.nativeMmSetOption(2, modernHud ? 1 : 0);
++        act.nativeMmSetOption(3, instantDoors ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -658,6 +805,11 @@ index 0000000..18ebdb5
 +            }
 +
 +            boolean showSkip = editing || (((stateBits & ST_CAN_SKIP) != 0) && !controlsHidden);
++            String skipLabel = (stateBits & ST_TEXT) != 0 ? "Skip text \u25B6\u25B6" : "Skip \u25B6\u25B6";
++            if (skipCtl.text != null && skipCtl.text.getTag() != skipLabel) {
++                skipCtl.text.setText(skipLabel);
++                skipCtl.text.setTag(skipLabel);
++            }
 +            skipCtl.view.setVisibility((showSkip && (!skipCtl.hidden || editing)) ? View.VISIBLE : View.GONE);
 +
 +            String q = act.nativeMmGetQuest();
@@ -724,7 +876,7 @@ index 0000000..18ebdb5
 +            for (Ctl c : ctls) c.view.setVisibility(View.GONE);
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
-+            pausePanel.setVisibility(View.GONE);
++            pauseWrap.setVisibility(View.GONE);
 +            hudBar.setVisibility(View.GONE);
 +            settingsPanel.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
@@ -1118,9 +1270,38 @@ index 0000000..18ebdb5
 +        questContent.setOrientation(LinearLayout.VERTICAL);
 +        content.addView(questContent);
 +
++        // Big arrows either side of the menu to flip pages
++        pauseWrap = new LinearLayout(act);
++        pauseWrap.setGravity(Gravity.CENTER_VERTICAL);
++        pauseWrap.addView(pageArrow("\u25C0", N64_Z));
++        pauseWrap.addView(pausePanel);
++        pauseWrap.addView(pageArrow("\u25B6", N64_R));
++        pauseWrap.setVisibility(View.GONE);
++        pausePanel.setVisibility(View.VISIBLE);
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
 +        lp.gravity = Gravity.CENTER;
-+        root.addView(pausePanel, lp);
++        root.addView(pauseWrap, lp);
++    }
++
++    private LinearLayout pauseWrap;
++
++    private TextView pageArrow(String glyph, int button) {
++        TextView a = new TextView(act);
++        a.setText(glyph);
++        a.setTextColor(GOLD);
++        a.setGravity(Gravity.CENTER);
++        a.setTextSize(TypedValue.COMPLEX_UNIT_SP, 26);
++        a.setBackground(styleFor(STYLE_PLAIN, false));
++        a.setOnClickListener(v -> {
++            touched();
++            v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++            pageTarget = -1;
++            tapN64(button);
++        });
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(64), dp(64));
++        lp.setMargins(dp(12), 0, dp(12), 0);
++        a.setLayoutParams(lp);
++        return a;
 +    }
 +
 +    private TextView pauseButton(String label, View.OnClickListener onClick) {
@@ -1277,18 +1458,18 @@ index 0000000..18ebdb5
 +    private void updatePausePanel() {
 +        boolean paused = (stateBits & ST_PAUSED) != 0;
 +        if (!paused || editing) {
-+            pausePanel.setVisibility(View.GONE);
++            pauseWrap.setVisibility(View.GONE);
 +            currentPage = -1;
 +            return;
 +        }
 +        int[] info = act.nativeMmGetPauseInfo();
 +        if (info == null || info.length < 16 || info[0] < 0) {
-+            pausePanel.setVisibility(View.GONE); // opening/closing animation, owl map, prompts
++            pauseWrap.setVisibility(View.GONE); // opening/closing animation, owl map, prompts
 +            return;
 +        }
 +        int page = info[0];
 +        currentPage = page;
-+        pausePanel.setVisibility(View.VISIBLE);
++        pauseWrap.setVisibility(View.VISIBLE);
 +        for (int i = 0; i < 4; i++) tabs[i].setTextColor(i == page ? GOLD : Color.argb(150, 243, 233, 210));
 +
 +        gridContent.setVisibility((page == 0 || page == 3) ? View.VISIBLE : View.GONE);
@@ -1375,6 +1556,8 @@ index 0000000..18ebdb5
 +            prefs.edit().putBoolean("swipeCamera", swipeCamera).apply();
 +            refreshSettings();
 +        });
++        aimSensLabel = settingsRow(settingsPanel, "Aim sensitivity", "\u2212", () -> setAimSens(aimSens - 0.05f),
++                "+", () -> setAimSens(aimSens + 0.05f));
 +        stickSensLabel = settingsRow(settingsPanel, "Stick sensitivity", "\u2212", () -> setStickSens(stickSens - 0.1f),
 +                "+", () -> setStickSens(stickSens + 0.1f));
 +        stickTypeLabel = settingsRow(settingsPanel, "Stick type", null, null, "Change", () -> {
@@ -1391,6 +1574,12 @@ index 0000000..18ebdb5
 +            refreshSettings();
 +        });
 +
++        doorsLabel = settingsRow(settingsPanel, "Area transitions", null, null, "Change", () -> {
++            instantDoors = !instantDoors;
++            prefs.edit().putBoolean("instantDoors", instantDoors).apply();
++            act.nativeMmSetOption(3, instantDoors ? 1 : 0);
++            refreshSettings();
++        });
 +        hudTypeLabel = settingsRow(settingsPanel, "Game HUD", null, null, "Change", () -> {
 +            modernHud = !modernHud;
 +            prefs.edit().putBoolean("modernHud", modernHud).apply();
@@ -1429,6 +1618,15 @@ index 0000000..18ebdb5
 +        refreshSettings();
 +    }
 +
++    private void setAimSens(float v) {
++        aimSens = Math.max(0.1f, Math.min(1.0f, Math.round(v * 100f) / 100f));
++        prefs.edit().putFloat("aimSens", aimSens).apply();
++        refreshSettings();
++    }
++
++    private boolean instantDoors;
++    private TextView doorsLabel;
++
 +    private void setStickSens(float v) {
 +        stickSens = Math.max(0.5f, Math.min(2.0f, Math.round(v * 10f) / 10f));
 +        prefs.edit().putFloat("stickSens", stickSens).apply();
@@ -1443,6 +1641,8 @@ index 0000000..18ebdb5
 +        stickTypeLabel.setText(fixedStick ? "Fixed" : "Dynamic");
 +        pauseTypeLabel.setText(touchOnlyPause ? "Touch only" : "Both");
 +        hudTypeLabel.setText(modernHud ? "Slim bar" : "Original");
++        aimSensLabel.setText(String.format(java.util.Locale.US, "%.2f\u00D7", aimSens));
++        doorsLabel.setText(instantDoors ? "Instant" : "Fade");
 +    }
 +
 +    private TextView trailTile, questTile, hideTile;
@@ -1544,6 +1744,15 @@ index 0000000..18ebdb5
 +        editBar.setVisibility(View.GONE);
 +
 +        editBar.addView(editButton("Done", v -> setEditing(false)));
++        editBar.addView(editButton("Size \u2212", v -> resizeSelected(1f / 1.1f)));
++        editBar.addView(editButton("Size +", v -> resizeSelected(1.1f)));
++        editBar.addView(editButton("Hide/Show", v -> {
++            if (selectedCtl != null) {
++                selectedCtl.hidden = !selectedCtl.hidden;
++                layoutAll();
++                if (selectedCtl.kind == KIND_MINIMAP) pushMinimap();
++            }
++        }));
 +        editBar.addView(editButton("See-through \u2212", v -> setOpacity(opacity - 0.1f)));
 +        opacityLabel = editButton("", null);
 +        editBar.addView(opacityLabel);
@@ -1551,7 +1760,7 @@ index 0000000..18ebdb5
 +        editBar.addView(editButton("Reset layout", v -> resetLayout()));
 +
 +        TextView help = new TextView(act);
-+        help.setText("Drag to move \u00B7 pinch to resize \u00B7 double-tap to hide/show");
++        help.setText("Tap a control to pick it, drag to move it");
 +        help.setTextColor(Color.argb(200, 255, 255, 255));
 +        help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 +        help.setPadding(dp(10), dp(9), dp(6), dp(9));
@@ -1615,7 +1824,7 @@ index 0000000..18ebdb5
 +                lp.leftMargin = (int) (c.x * w - pw / 2f);
 +                lp.topMargin = (int) (c.y * h);
 +                c.view.setLayoutParams(lp);
-+                float k = c.size / 360f;
++                float k = Math.max(0.45f, c.size / 360f);
 +                questWhere.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12 * k);
 +                questTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17 * k);
 +                questText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13 * k);
@@ -1693,6 +1902,7 @@ index 0000000..18ebdb5
 +
 +    private void setEditing(boolean on) {
 +        editing = on;
++        selectedCtl = null;
 +        editBar.setVisibility(on ? View.VISIBLE : View.GONE);
 +        tray.setVisibility(View.GONE);
 +        if (on) {
@@ -1765,12 +1975,62 @@ index 0000000..18ebdb5
 +    }
 +
 +    private long lastEditTap = 0;
++    private Ctl selectedCtl = null;
++
++    private float minSize(Ctl c) {
++        switch (c.kind) {
++            case KIND_PANEL: return 140f;   // quest tracker width
++            case KIND_HUD: return 16f;      // hearts/time bar height
++            case KIND_MINIMAP: return 30f;
++            case KIND_SKIP: return 28f;
++            default: return 30f;
++        }
++    }
++
++    private float maxSize(Ctl c) {
++        switch (c.kind) {
++            case KIND_PANEL: return 640f;
++            case KIND_HUD: return 64f;
++            case KIND_MINIMAP: return 220f;
++            default: return 170f;
++        }
++    }
++
++    private void resizeSelected(float factor) {
++        touched();
++        if (selectedCtl == null) {
++            showToast("Tap a control first");
++            return;
++        }
++        selectedCtl.size = Math.max(minSize(selectedCtl), Math.min(maxSize(selectedCtl), selectedCtl.size * factor));
++        layoutAll();
++        if (selectedCtl.kind == KIND_MINIMAP) pushMinimap();
++    }
++
++    private void selectCtl(Ctl c) {
++        if (selectedCtl == c) return;
++        selectedCtl = c;
++        showToast("Selected: " + ctlName(c));
++    }
++
++    private String ctlName(Ctl c) {
++        switch (c.kind) {
++            case KIND_PANEL: return "quest tracker";
++            case KIND_HUD: return "hearts & time bar";
++            case KIND_MINIMAP: return "map & compass";
++            case KIND_STICK: return "stick";
++            case KIND_SKIP: return "skip button";
++            case KIND_TRAY: return "menu button";
++            default: return c.sub.isEmpty() ? c.label : c.sub;
++        }
++    }
 +
 +    private boolean onCtlEdit(Ctl c, MotionEvent e) {
 +        int w = root.getWidth(), h = root.getHeight();
 +        float anchorY = c.kind == KIND_PANEL ? c.y * h : c.y * h;
 +        switch (e.getActionMasked()) {
 +            case MotionEvent.ACTION_DOWN: {
++                selectCtl(c);
 +                long now = System.currentTimeMillis();
 +                if (now - lastEditTap < 300) {
 +                    c.hidden = !c.hidden;
@@ -1791,8 +2051,7 @@ index 0000000..18ebdb5
 +            case MotionEvent.ACTION_MOVE:
 +                if (e.getPointerCount() >= 2 && c.pinchStartDist > 0) {
 +                    float scale = spacing(e) / c.pinchStartDist;
-+                    float min = c.kind == KIND_PANEL ? 220f : (c.kind == KIND_HUD ? 24f : 36f);
-+                    float max = c.kind == KIND_PANEL ? 640f : (c.kind == KIND_HUD ? 64f : (c.kind == KIND_MINIMAP ? 200f : 160f));
++                    float min = minSize(c), max = maxSize(c);
 +                    c.size = Math.max(min, Math.min(max, c.pinchStartSize * scale));
 +                } else if (e.getPointerCount() == 1) {
 +                    c.x = clamp((e.getRawX() - c.dragDx) / w);
@@ -1993,15 +2252,20 @@ index 0000000..18ebdb5
 +                    if (speed > gesturePeak) gesturePeak = speed;
 +
 +                    // Ignore tiny wobbles, then a gentle curve: slow swipes = fine aim, fast swipes = big turns.
++                    // While aiming in first person, everything is scaled down and the curve is steeper,
++                    // so small finger movements make very small adjustments.
++                    boolean aiming = (stateBits & ST_AIMING) != 0;
 +                    float tx = 0, ty = 0;
-+                    if (speed > 25f) {
++                    if (speed > (aiming ? 8f : 25f)) {
 +                        float norm = Math.min(1.6f, speed / (typicalSwipe * 1.1f));
-+                        float curved = (float) Math.pow(norm, 1.35);
-+                        tx = vx / speed * curved;
-+                        ty = vy / speed * curved * 0.85f;
++                        float curved = (float) Math.pow(norm, aiming ? 1.8 : 1.35);
++                        float k = aiming ? aimSens / Math.max(0.3f, camSens) : 1f;
++                        tx = vx / speed * curved * k;
++                        ty = vy / speed * curved * (aiming ? 1f : 0.85f) * k;
 +                    }
-+                    camVx = camVx * 0.55f + tx * 0.45f;
-+                    camVy = camVy * 0.55f + ty * 0.45f;
++                    float smooth = aiming ? 0.7f : 0.55f;
++                    camVx = camVx * smooth + tx * (1f - smooth);
++                    camVy = camVy * smooth + ty * (1f - smooth);
 +                    camLastX = e.getX(p);
 +                    camLastY = e.getY(p);
 +                    camLastT = now;
@@ -2655,10 +2919,10 @@ index 0000000..b9e2c10
 +};
 diff --git a/mm/2s2h/Enhancements/Touch/MMQuest.c b/mm/2s2h/Enhancements/Touch/MMQuest.c
 new file mode 100644
-index 0000000..6bc4bcc
+index 0000000..fc9be19
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMQuest.c
-@@ -0,0 +1,525 @@
+@@ -0,0 +1,548 @@
 +// Majora's Mask touch mod: main quest tracker + Tatl trail (ported from the Recompiled mod).
 +#include "global.h"
 +#include "MMQuestData.h"
@@ -2869,8 +3133,25 @@ index 0000000..6bc4bcc
 +
 +static u8 sVisited[SCENE_COUNT_MQ];
 +
++static bool sVisitedDirty = false;
++
 +static bool Visited(s32 scene) {
 +    return (scene >= 0) && (scene < SCENE_COUNT_MQ) && sVisited[scene];
++}
++
++static bool RegionVisited(s32 region) {
++    return (gSaveContext.save.saveInfo.regionsVisited & (1 << region)) != 0;
++}
++
++// Visited areas are kept per save file (MMTouch.cpp saves/loads them), so they survive restarts.
++u8* MMQuest_VisitedArray(void) {
++    return sVisited;
++}
++
++s32 MMQuest_TakeVisitedDirty(void) {
++    s32 d = sVisitedDirty;
++    sVisitedDirty = false;
++    return d;
 +}
 +
 +static bool HasItem(u8 item) {
@@ -2927,7 +3208,10 @@ index 0000000..6bc4bcc
 +    // ---- Snowhead ----
 +    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_GOHT)) {
 +        if (!HasItem(ITEM_MASK_GORON)) {
-+            if (!Visited(0x50) && !Visited(0x5A)) return Q_MOUNTAIN_VILLAGE;
++            if (!Visited(0x50) && !Visited(0x5A) && !Visited(0x4D) && !Visited(0x5D) &&
++                !RegionVisited(REGION_SNOWHEAD) && !RegionVisited(REGION_GORON_VILLAGE)) {
++                return Q_MOUNTAIN_VILLAGE;
++            }
 +            if (!HasItem(ITEM_LENS_OF_TRUTH)) return Q_LENS;
 +            return Q_DARMANI;
 +        }
@@ -2943,7 +3227,7 @@ index 0000000..6bc4bcc
 +    if (!CHECK_QUEST_ITEM(QUEST_REMAINS_GYORG)) {
 +        if (!HasItem(ITEM_MASK_ZORA)) {
 +            if (!CHECK_QUEST_ITEM(QUEST_SONG_EPONA)) {
-+                if (!Visited(0x35)) {
++                if (!Visited(0x35) && !RegionVisited(REGION_ROMANI_RANCH)) {
 +                    if (!HasItem(ITEM_POWDER_KEG) && !CHECK_WEEKEVENTREG(WEEKEVENTREG_HAS_POWDERKEG_PRIVILEGES)) {
 +                        return Q_POWDER_KEG;
 +                    }
@@ -2951,7 +3235,7 @@ index 0000000..6bc4bcc
 +                }
 +                return Q_EPONA;
 +            }
-+            if (!Visited(0x37)) return Q_GREAT_BAY;
++            if (!Visited(0x37) && !RegionVisited(REGION_GREAT_BAY)) return Q_GREAT_BAY;
 +            return Q_MIKAU;
 +        }
 +        if (!CHECK_QUEST_ITEM(QUEST_SONG_BOSSA_NOVA)) {
@@ -3170,7 +3454,10 @@ index 0000000..6bc4bcc
 +    s32 step;
 +
 +    if (player == NULL) return;
-+    if ((play->sceneId >= 0) && (play->sceneId < SCENE_COUNT_MQ)) sVisited[play->sceneId] = true;
++    if ((play->sceneId >= 0) && (play->sceneId < SCENE_COUNT_MQ) && !sVisited[play->sceneId]) {
++        sVisited[play->sceneId] = true;
++        sVisitedDirty = true;
++    }
 +
 +    step = GetMainQuestStep();
 +    if ((step != sCachedStep) || (play->sceneId != sCachedScene) || ((play->gameplayFrames % 10) == 0)) {
@@ -3212,10 +3499,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..c6bf3b2
+index 0000000..a8a6bbb
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,987 @@
+@@ -0,0 +1,1123 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -3251,6 +3538,8 @@ index 0000000..c6bf3b2
 +const char* MMQuest_Chapter(s32 step);
 +void MMQuest_Progress(s32 step, s32* index, s32* count);
 +void MMQuest_Update(PlayState* play, s32 trailOn);
++u8* MMQuest_VisitedArray(void);
++s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
 +#ifdef __ANDROID__
@@ -3273,6 +3562,8 @@ index 0000000..c6bf3b2
 +    ST_CAN_SKIP = 1 << 0, ST_OCARINA = 1 << 1, ST_SHOW_QUEST = 1 << 2, ST_SPRINT = 1 << 3, ST_TRAIL = 1 << 4,
 +    ST_SKIPPING = 1 << 5, ST_PAUSED = 1 << 6, ST_PAUSE_GRID = 1 << 7, // item or mask page ready for touch
 +    ST_GAMEPLAY = 1 << 8, // normal play (not paused, not in a cutscene): show the HUD bar
++    ST_AIMING = 1 << 9,   // first-person aiming (bow, hookshot...): the overlay switches to fine aim
++    ST_TEXT = 1 << 10,    // a conversation is on screen (skip button says "Skip text")
 +};
 +
 +// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
@@ -3448,15 +3739,40 @@ index 0000000..c6bf3b2
 +static bool sSprintOn = false;
 +static s32 sStoppedFrames = 0;
 +static bool sTrailOn = true;
++static bool sSkipping = false; // cutscene skip in progress
++
++// ---------------------------------------------------------------- breadcrumbs (for crash reports)
++// A small text file with what the game and the mod were doing, refreshed every few seconds and on every
++// mod action. If the app crashes, the overlay attaches it to the crash report it saves to Downloads.
++static std::mutex sCrumbMutex;
++static std::vector<std::string> sCrumbEvents;
++
++static void Crumb(const std::string& event) {
++    std::lock_guard<std::mutex> lock(sCrumbMutex);
++    sCrumbEvents.push_back(std::to_string(gGameState != nullptr ? (int)gSaveContext.save.time : 0) + " " + event);
++    if (sCrumbEvents.size() > 40) sCrumbEvents.erase(sCrumbEvents.begin());
++}
++
++static void WriteCrumbs(const std::string& status) {
++    std::string path = Ship::Context::GetPathRelativeToAppDirectory("mm_breadcrumbs.txt");
++    std::ofstream f(path, std::ios::trunc);
++    if (!f) return;
++    f << "Majora's Mask touch mod - last known state\n" << status << "\nRecent events (game time, event):\n";
++    std::lock_guard<std::mutex> lock(sCrumbMutex);
++    for (auto& e : sCrumbEvents) f << "  " << e << "\n";
++}
 +
 +static void PostMessage(const char* msg) {
++    Crumb(std::string("message: ") + msg);
 +    std::lock_guard<std::mutex> lock(sTextMutex);
 +    sMessage = msg;
 +}
 +
 +static bool TakeRequest(int act) {
 +    int bit = 1 << act;
-+    return (sRequestMask.fetch_and(~bit) & bit) != 0;
++    bool taken = (sRequestMask.fetch_and(~bit) & bit) != 0;
++    if (taken) Crumb("action " + std::to_string(act));
++    return taken;
 +}
 +
 +// ---------------------------------------------------------------- ocarina auto-play
@@ -3779,6 +4095,26 @@ index 0000000..c6bf3b2
 +            PostMessage("No quick save yet");
 +        }
 +    }
++    static u32 sCrumbTimer = 0;
++    if ((++sCrumbTimer % 60) == 0) {
++        std::string st;
++        if (gPlayState != nullptr) {
++            PlayState* play = gPlayState;
++            st = "in play: scene=" + std::to_string(play->sceneId) + " room=" + std::to_string(play->roomCtx.curRoom.num) +
++                 " entrance=" + std::to_string(gSaveContext.save.entrance) +
++                 " gameMode=" + std::to_string(gSaveContext.gameMode) + " day=" + std::to_string(gSaveContext.save.day) +
++                 " time=" + std::to_string(gSaveContext.save.time) +
++                 " paused=" + std::to_string(IS_PAUSED(&play->pauseCtx)) + " page=" + std::to_string(play->pauseCtx.pageIndex) +
++                 " msgMode=" + std::to_string(play->msgCtx.msgMode) + " cs=" + std::to_string(play->csCtx.state) +
++                 " trail=" + std::to_string(sTrailOn) + " sprint=" + std::to_string(sSprintOn) +
++                 " skipping=" + std::to_string(sSkipping) + " health=" +
++                 std::to_string(gSaveContext.save.saveInfo.playerData.health) +
++                 " icons=" + std::to_string(sIconCache.size());
++        } else {
++            st = "not in gameplay (logo / title / file select)";
++        }
++        WriteCrumbs(st);
++    }
 +    if (gPlayState == nullptr) sStateBits = 0; // logo / file select: no gameplay panels
 +    sFrameCounter++; // keeps the overlay's "game is running" check alive outside gameplay too
 +}
@@ -3872,31 +4208,99 @@ index 0000000..c6bf3b2
 +    return true;
 +}
 +
++static bool InConversation(PlayState* play) {
++    MessageContext* msgCtx = &play->msgCtx;
++    return (msgCtx->msgMode != MSGMODE_NONE) && (msgCtx->ocarinaMode == OCARINA_MODE_NONE) &&
++           !play->pauseCtx.itemDescriptionOn && !play->pauseCtx.bombersNotebookOpen;
++}
++
++// Skippable: story cutscenes and any conversation (it stops by itself at questions/answers).
 +static bool CanStartSkip(PlayState* play) {
-+    Player* player = GET_PLAYER(play);
 +    if (!BaseSkippable(play)) return false;
-+    if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_TALKING)) return false;
++    if (InConversation(play)) return true;
 +    if (play->csCtx.state != CS_STATE_IDLE) return true;
 +    return (CutsceneManager_GetCurrentCsId() != CS_ID_NONE) && (play->msgCtx.msgMode == MSGMODE_NONE);
 +}
 +
-+static bool sSkipping = false;
 +static s32 sSkipBudget = 0;
 +static u32 sSkipTick = 0;
 +static s32 sSkipVisibleFrames = 0;
 +
++// Runs the game very fast and "presses" through text until the cutscene/conversation is over
++// or a question needs answering (BaseSkippable stops at choice/number boxes).
 +static void RunSkip(PlayState* play) {
 +    for (s32 i = 0; i < 90; i++) {
-+        if (!play->state.running || !BaseSkippable(play) || !InCutscene(play) || (sSkipBudget-- <= 0)) {
++        if (!play->state.running || !BaseSkippable(play) || !(InCutscene(play) || InConversation(play)) ||
++            (sSkipBudget-- <= 0)) {
 +            sSkipping = false;
++            Crumb("skip finished");
 +            return;
 +        }
 +        Input* input = CONTROLLER1(&play->state);
-+        u16 saved = input->press.button;
++        u16 savedPress = input->press.button;
++        u16 savedCur = input->cur.button;
 +        bool inject = (play->msgCtx.msgMode != MSGMODE_NONE) && ((sSkipTick++ & 1) == 0);
-+        if (inject) input->press.button |= BTN_B; // advance cutscene text
++        if (inject) {
++            // B finishes the line being typed; A (and B) move on to the next box.
++            u16 btn = (play->msgCtx.msgMode == MSGMODE_TEXT_DISPLAYING) ? BTN_B : (BTN_A | BTN_B);
++            input->press.button |= btn;
++            input->cur.button |= btn;
++        }
 +        Play_UpdateMain(play);
-+        if (inject) input->press.button = saved;
++        if (inject) {
++            input->press.button = savedPress;
++            input->cur.button = savedCur;
++        }
++    }
++}
++
++// ---------------------------------------------------------------- instant area transitions
++// Called from Play_UpdateTransition: plain fades become instant cuts (cutscene transitions are left alone).
++static std::atomic<int> sInstantDoors{ 1 };
++
++extern "C" void MMMod_AdjustTransition(PlayState* play) {
++    if (!sInstantDoors.load()) return;
++    if (play->transitionMode != TRANS_MODE_SETUP) return;
++    switch (play->transitionType) {
++        case TRANS_TYPE_FADE_BLACK:
++        case TRANS_TYPE_FADE_WHITE:
++        case TRANS_TYPE_FADE_BLACK_FAST:
++        case TRANS_TYPE_FADE_WHITE_FAST:
++        case TRANS_TYPE_FADE_BLACK_SLOW:
++        case TRANS_TYPE_FADE_WHITE_SLOW:
++        case TRANS_TYPE_FADE_DYNAMIC:
++            break;
++        default:
++            return;
++    }
++    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return;
++    if (play->csCtx.state != CS_STATE_IDLE) return;
++    if (gSaveContext.nextCutsceneIndex >= 0xFFF0) return;
++    play->transitionType = TRANS_TYPE_INSTANT;
++}
++
++// ---------------------------------------------------------------- visited areas, saved per file
++static s32 sVisitedFile = -1;
++
++static std::string VisitedPath(s32 file) {
++    return Ship::Context::GetPathRelativeToAppDirectory("mm_visited_" + std::to_string(file) + ".bin");
++}
++
++static void SyncVisited() {
++    s32 file = gSaveContext.fileNum;
++    if (file < 0 || file > 8) return;
++    u8* visited = MMQuest_VisitedArray();
++    if (file != sVisitedFile) {
++        sVisitedFile = file;
++        memset(visited, 0, 0x71);
++        std::ifstream f(VisitedPath(file), std::ios::binary);
++        if (f) f.read((char*)visited, 0x71);
++        MMQuest_TakeVisitedDirty();
++        return;
++    }
++    if (MMQuest_TakeVisitedDirty()) {
++        std::ofstream f(VisitedPath(file), std::ios::binary | std::ios::trunc);
++        if (f) f.write((const char*)visited, 0x71);
 +    }
 +}
 +
@@ -3940,6 +4344,11 @@ index 0000000..c6bf3b2
 +
 +extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
 +    int bits = 0;
++    static s32 sLastCrumbScene = -1;
++    if (play->sceneId != sLastCrumbScene) {
++        sLastCrumbScene = play->sceneId;
++        Crumb("entered scene " + std::to_string(play->sceneId));
++    }
 +    ApplyHudStyle();
 +    ApplyMinimap();
 +    UpdateHudData(play);
@@ -3982,6 +4391,7 @@ index 0000000..c6bf3b2
 +
 +    // Quest tracker + Tatl trail
 +    if (gSaveContext.gameMode == GAMEMODE_NORMAL) {
++        SyncVisited();
 +        MMQuest_Update(play, sTrailOn);
 +        s32 step = MMQuest_GetStep();
 +        if (step != sLastStep) {
@@ -4015,6 +4425,11 @@ index 0000000..c6bf3b2
 +        bits |= ST_GAMEPLAY;
 +    }
 +    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
++    {
++        Player* player = GET_PLAYER(play);
++        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_100000)) bits |= ST_AIMING;
++        if (InConversation(play)) bits |= ST_TEXT;
++    }
 +    if (sSprintOn) bits |= ST_SPRINT;
 +    if (sTrailOn) bits |= ST_TRAIL;
 +    sStateBits = bits;
@@ -4031,7 +4446,7 @@ index 0000000..c6bf3b2
 +
 +static void ApplyPresetOnce() {
 +    s32 version = CVarGetInteger(CVAR_PRESET_VERSION, 0);
-+    if (version >= 3) return;
++    if (version >= 4) return;
 +    if (version == 0) {
 +        CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
 +        CVarSetInteger("gEnhancements.Masks.FastTransformation", 1);
@@ -4051,7 +4466,10 @@ index 0000000..c6bf3b2
 +    if (version < 3) {
 +        ApplyTouchCameraPreset();
 +    }
-+    CVarSetInteger(CVAR_PRESET_VERSION, 3);
++    if (version < 4) {
++        CVarSetInteger("gEnhancements.Camera.FirstPerson.RightStickEnabled", 1);
++    }
++    CVarSetInteger(CVAR_PRESET_VERSION, 4);
 +    CVarSave();
 +    ShipInit::Init("*");
 +}
@@ -4146,6 +4564,10 @@ index 0000000..c6bf3b2
 +    return arr;
 +}
 +
++extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetBreadcrumbPath(JNIEnv* env, jobject) {
++    return MakeJString(env, Ship::Context::GetPathRelativeToAppDirectory("mm_breadcrumbs.txt"));
++}
++
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetMinimap(JNIEnv*, jobject, jint visible,
 +                                                                                         jint x, jint y, jint scale) {
 +    sMinimapVals[0] = visible;
@@ -4192,6 +4614,7 @@ index 0000000..c6bf3b2
 +                                                                                        jint value) {
 +    if (option == 1) sTouchOnlyPause = value;
 +    if (option == 2) sModernHud = value;
++    if (option == 3) sInstantDoors = value;
 +}
 +
 +// { health (1/16 hearts), max health, magic, max magic (0 = none), rupees, wallet size, day, time, flags }
@@ -4232,10 +4655,26 @@ index f0e57da..9b9d94f 100644
          if ((input->cur.button & (BTN_DDOWN | BTN_DUP)) == (BTN_DDOWN | BTN_DUP)) {
              input->cur.button &= ~(BTN_DDOWN | BTN_DUP);
 diff --git a/mm/src/code/z_play.c b/mm/src/code/z_play.c
-index fa46547..56deddc 100644
+index fa46547..92a08eb 100644
 --- a/mm/src/code/z_play.c
 +++ b/mm/src/code/z_play.c
-@@ -1110,6 +1110,9 @@ void Play_UpdateMain(PlayState* this) {
+@@ -610,12 +610,15 @@ void Play_UpdateWaterCamera(PlayState* this, Camera* camera) {
+     }
+ }
+ 
++void MMMod_AdjustTransition(PlayState* play);
++
+ void Play_UpdateTransition(PlayState* this) {
+     s32 pad;
+ 
+     if (this->transitionMode == TRANS_MODE_OFF) {
+         return;
+     }
++    MMMod_AdjustTransition(this); // Majora's Mask touch mod: instant area transitions
+ 
+     switch (this->transitionMode) {
+         case TRANS_MODE_SETUP:
+@@ -1110,6 +1113,9 @@ void Play_UpdateMain(PlayState* this) {
      }
  }
  
@@ -4245,7 +4684,7 @@ index fa46547..56deddc 100644
  void Play_Update(PlayState* this) {
      if (!sBombersNotebookOpen) {
          if (this->pauseCtx.bombersNotebookOpen) {
-@@ -1137,6 +1140,7 @@ void Play_Update(PlayState* this) {
+@@ -1137,6 +1143,7 @@ void Play_Update(PlayState* this) {
          Message_Update(this);
      } else {
          Play_UpdateMain(this);
@@ -4253,7 +4692,7 @@ index fa46547..56deddc 100644
      }
  }
  
-@@ -2226,6 +2230,8 @@ void Play_Init(GameState* thisx) {
+@@ -2226,6 +2233,8 @@ void Play_Init(GameState* thisx) {
      u8 sceneLayer;
      s32 pad2;
  
