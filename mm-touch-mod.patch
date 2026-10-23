@@ -214,20 +214,25 @@ index 0000000..7c2bb39
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..4ea122b 100644
+index fe546c8..5e2d13b 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-@@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
+@@ -103,6 +103,14 @@ public class MainActivity extends SDLActivity{
          }
  
          setupControllerOverlay();
 +        // Majora's Mask touch mod: editable overlay replaces the stock one.
-+        modTouchOverlay = new ModTouchOverlay(this);
-+        modTouchOverlay.attach();
++        try {
++            modTouchOverlay = new ModTouchOverlay(this);
++            modTouchOverlay.attach();
++        } catch (Throwable t) {
++            android.util.Log.e("MMTouch", "Touch overlay failed, using the stock controls", t);
++            modTouchOverlay = null;
++        }
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +958,24 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +963,24 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -252,7 +257,7 @@ index fe546c8..4ea122b 100644
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +983,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +988,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -264,10 +269,10 @@ index fe546c8..4ea122b 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..99fcb03
+index 0000000..18ebdb5
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1739 @@
+@@ -0,0 +1,1761 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -572,8 +577,12 @@ index 0000000..99fcb03
 +        buildCloseMenuButton();
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
-+            layoutAll();
-+            if (r - l != orr - ol || b - t != ob - ot) pushMinimap();
++            try {
++                layoutAll();
++                if (r - l != orr - ol || b - t != ob - ot) pushMinimap();
++            } catch (Throwable ex) {
++                android.util.Log.e("MMTouch", "layout", ex);
++            }
 +        });
 +        act.nativeMmSetOverlayActive(true);
 +        act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
@@ -586,6 +595,17 @@ index 0000000..99fcb03
 +    private final Runnable housekeeping = new Runnable() {
 +        @Override
 +        public void run() {
++            try {
++                housekeepingStep();
++            } catch (Throwable t) {
++                android.util.Log.e("MMTouch", "housekeeping", t);
++            }
++            handler.postDelayed(this, 300);
++        }
++    };
++
++    private void housekeepingStep() {
++        {
 +            if (act.overlayView != null && act.overlayView.getVisibility() != View.GONE) {
 +                act.overlayView.setVisibility(View.GONE);
 +            }
@@ -597,18 +617,27 @@ index 0000000..99fcb03
 +                float t = (c.kind == KIND_TRAY) ? Math.max(target, 0.35f) : target; // keep "..." findable
 +                if (Math.abs(c.view.getAlpha() - t) > 0.01f) c.view.animate().alpha(t).setDuration(250).start();
 +            }
-+            handler.postDelayed(this, 300);
 +        }
-+    };
++    }
 +
 +    // Reads game state from MMTouch.cpp and updates the panels.
 +    private final Runnable poll = new Runnable() {
 +        @Override
 +        public void run() {
++            try {
++                pollStep();
++            } catch (Throwable t) {
++                android.util.Log.e("MMTouch", "poll", t);
++            }
++            handler.postDelayed(this, 100);
++        }
++    };
++
++    private void pollStep() {
++        {
 +            boolean menu = !act.TouchAreaEnabled;
 +            if (menu != menuMode) setMenuMode(menu);
 +            if (menuMode) {
-+                handler.postDelayed(this, 100);
 +                return;
 +            }
 +            long s = act.nativeMmGetState();
@@ -659,10 +688,8 @@ index 0000000..99fcb03
 +
 +            String msg = act.nativeMmPollMessage();
 +            if (msg != null && !msg.isEmpty()) showToast(msg);
-+
-+            handler.postDelayed(this, 100);
 +        }
-+    };
++    }
 +
 +    private void buildCloseMenuButton() {
 +        closeMenuBtn = hudText(15);
@@ -1595,6 +1622,9 @@ index 0000000..99fcb03
 +                if (editing) c.view.setAlpha(c.hidden ? 0.35f : 1f);
 +                continue;
 +            }
++            if (c.kind == KIND_HUD) {
++                continue; // laid out by layoutHudBar() (it has no text label)
++            }
 +            int px = dp(c.size);
 +            int pw = c.kind == KIND_SKIP ? (int) (px * 2.2f) : px;
 +            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(pw, px);
@@ -1603,10 +1633,7 @@ index 0000000..99fcb03
 +            c.view.setLayoutParams(lp);
 +            float ratio = c.kind == KIND_SKIP ? 0.30f
 +                    : (c.sub.isEmpty() ? (c.label.length() > 3 ? 0.22f : (c.style == STYLE_C ? 0.36f : 0.42f)) : 0.24f);
-+            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
-+            if (c.kind == KIND_HUD) {
-+                continue; // laid out by layoutHudBar()
-+            }
++            if (c.text != null) c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
 +            if (c.kind == KIND_MINIMAP) {
 +                c.view.setVisibility(editing ? View.VISIBLE : View.GONE);
 +                if (editing) c.view.setAlpha(c.hidden ? 0.3f : 1f);
