@@ -3499,10 +3499,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..a8a6bbb
+index 0000000..10f7da8
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1123 @@
+@@ -0,0 +1,1131 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -4046,6 +4046,10 @@ index 0000000..a8a6bbb
 +    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
 +    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
 +    memcpy(&gSaveContext.shipSaveContext, &sSnap->shipSaveContext, sizeof(ShipSaveContext));
++    // Like a normal file load: make the game rebuild the magic meter (capacity is not part of the save),
++    // otherwise magic shows as empty and magic jars don't refill it.
++    gSaveContext.save.saveInfo.playerData.magicLevel = 0;
++    gSaveContext.magicState = MAGIC_STATE_IDLE;
 +    GameInteractor_ExecuteOnSaveLoad(gSaveContext.fileNum);
 +
 +    // Runtime state a normal file load sets up (mirrors MapSelect_LoadGame)
@@ -4081,6 +4085,10 @@ index 0000000..a8a6bbb
 +    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
 +    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
 +    memcpy(&gSaveContext.shipSaveContext, &sSnap->shipSaveContext, sizeof(ShipSaveContext));
++    // Like a normal file load: make the game rebuild the magic meter (capacity is not part of the save),
++    // otherwise magic shows as empty and magic jars don't refill it.
++    gSaveContext.save.saveInfo.playerData.magicLevel = 0;
++    gSaveContext.magicState = MAGIC_STATE_IDLE;
 +    gSaveContext.save.entrance = sSnap->respawn.entrance;
 +    ApplySnapshotRespawn();
 +}
