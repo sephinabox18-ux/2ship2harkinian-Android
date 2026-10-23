@@ -214,7 +214,7 @@ index 0000000..7c2bb39
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index 287c258..4ea122b 100644
+index fe546c8..4ea122b 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
@@ -227,18 +227,7 @@ index 287c258..4ea122b 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -299,10 +302,6 @@ public class MainActivity extends SDLActivity{
-     }
- 
-     private File getDefaultDataRootFolder() {
--        if (BuildConfig.APPLICATION_ID.equals("com.twoshipfork.mm.performancetest") ||
--                BuildConfig.APPLICATION_ID.equals("com.twoshipfork.mm.performancetestci")) {
--            return new File(Environment.getExternalStorageDirectory(), "2S2H-performance-test");
--        }
-         return new File(Environment.getExternalStorageDirectory(), "2S2H");
-     }
- 
-@@ -959,6 +958,24 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +958,24 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -263,7 +252,7 @@ index 287c258..4ea122b 100644
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -966,7 +983,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +983,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
