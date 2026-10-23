@@ -139,68 +139,67 @@ index 0000000..b6c94da
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..f0286f5
+index 0000000..fe4fe46
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,228 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
 +import android.graphics.Canvas;
 +import android.graphics.Color;
++import android.graphics.LinearGradient;
 +import android.graphics.Paint;
 +import android.graphics.Path;
++import android.graphics.RadialGradient;
 +import android.graphics.RectF;
++import android.graphics.Shader;
 +import android.graphics.Typeface;
 +import android.util.TypedValue;
 +import android.view.View;
 +
 +/**
-+ * Slim HUD bar along the bottom of the screen: hearts, magic, rupees and a small clock.
-+ * Replaces the vanilla hearts/magic/rupees and the big half-circle clock.
++ * Classic Zelda-style HUD in the top-left: a row of glossy hearts, a gold-framed magic bar under it,
++ * and a small rupee count + clock line below. Replaces the vanilla hearts/magic/rupees and the big clock.
++ * "unit" (from Edit controls) is the height of one row; the whole HUD is about 2.6 units tall.
 + */
 +public class HudBarView extends View {
-+    private static final int GOLD = Color.rgb(222, 190, 110);
-+
-+    private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
-+    private final Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Paint heartFill = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Paint heartEmpty = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Paint heartEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint heartShine = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint frame = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint frameFill = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Paint magicFill = new Paint(Paint.ANTI_ALIAS_FLAG);
-+    private final Paint magicTrack = new Paint(Paint.ANTI_ALIAS_FLAG);
-+    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Paint gem = new Paint(Paint.ANTI_ALIAS_FLAG);
-+    private final Paint divider = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint gemEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint rupee = new Paint(Paint.ANTI_ALIAS_FLAG);
 +    private final Path heart = new Path();
++    private final Path wedge = new Path();
++    private final RectF arc = new RectF();
 +    private final RectF r = new RectF();
 +
 +    // health (1/16 hearts), max health, magic, max magic, rupees, wallet, day, time, flags
 +    private int[] hud = new int[9];
 +    private float scale = 1f;
-+    private final Path wedge = new Path();
-+    private final RectF arc = new RectF();
 +
 +    public HudBarView(Context c) {
 +        super(c);
-+        applySizes();
-+        bg.setColor(Color.argb(170, 14, 12, 22));
-+        border.setStyle(Paint.Style.STROKE);
-+        border.setColor(Color.argb(150, 222, 190, 110));
-+        heartFill.setColor(Color.rgb(214, 58, 52));
-+        heartEmpty.setColor(Color.argb(110, 60, 20, 24));
++        heartEmpty.setColor(Color.argb(150, 40, 12, 14));
 +        heartEdge.setStyle(Paint.Style.STROKE);
-+        heartEdge.setColor(Color.argb(200, 255, 230, 220));
-+        magicFill.setColor(Color.rgb(70, 190, 90));
-+        magicTrack.setColor(Color.argb(120, 20, 40, 24));
-+        text.setColor(Color.rgb(243, 233, 210));
++        heartEdge.setColor(Color.argb(230, 30, 8, 8));
++        heartShine.setColor(Color.argb(110, 255, 255, 255));
++        frame.setStyle(Paint.Style.STROKE);
++        frameFill.setColor(Color.argb(170, 10, 14, 10));
++        gemEdge.setStyle(Paint.Style.STROKE);
++        gemEdge.setColor(Ornate.GOLD_LIGHT);
++        text.setColor(Ornate.CREAM);
 +        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-+        gem.setColor(Color.rgb(80, 200, 110));
-+        divider.setColor(Color.argb(90, 222, 190, 110));
 +        applySizes();
 +    }
 +
-+    /** 1.0 = default size; Edit controls pinch changes this. */
++    /** 1.0 = default size; Edit controls changes this. */
 +    public void setScale(float k) {
 +        if (Math.abs(k - scale) < 0.01f) return;
 +        scale = k;
@@ -209,24 +208,26 @@ index 0000000..f0286f5
 +    }
 +
 +    private void applySizes() {
-+        border.setStrokeWidth(dp(1.5f));
-+        heartEdge.setStrokeWidth(dp(1));
-+        text.setTextSize(dp(13));
-+        text.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
-+        divider.setStrokeWidth(dp(1));
++        heartEdge.setStrokeWidth(dp(1.4f));
++        frame.setStrokeWidth(dp(2.2f));
++        gemEdge.setStrokeWidth(dp(1f));
++        text.setTextSize(dp(12.5f));
++        text.setShadowLayer(dp(2.5f), 0, dp(1), Color.BLACK);
 +    }
 +
 +    public void setHud(int[] values) {
 +        if (values == null || values.length < 9) return;
 +        boolean changed = false;
 +        for (int i = 0; i < 9; i++) {
-+            // the clock ticks constantly; only redraw when the minute changes
 +            int v = (i == 7) ? (values[i] * 24 * 60 / 65536) : values[i];
 +            int old = (i == 7) ? (hud[i] * 24 * 60 / 65536) : hud[i];
 +            if (v != old) changed = true;
 +        }
 +        hud = values.clone();
-+        if (changed) invalidate();
++        if (changed) {
++            invalidate();
++            requestLayout();
++        }
 +    }
 +
 +    private float dp(float v) {
@@ -235,42 +236,45 @@ index 0000000..f0286f5
 +
 +    private void heartPath(float cx, float cy, float s) {
 +        heart.reset();
-+        heart.moveTo(cx, cy + s * 0.45f);
-+        heart.cubicTo(cx - s * 0.95f, cy - s * 0.15f, cx - s * 0.45f, cy - s * 0.85f, cx, cy - s * 0.35f);
-+        heart.cubicTo(cx + s * 0.45f, cy - s * 0.85f, cx + s * 0.95f, cy - s * 0.15f, cx, cy + s * 0.45f);
++        heart.moveTo(cx, cy + s * 0.5f);
++        heart.cubicTo(cx - s * 1.0f, cy - s * 0.1f, cx - s * 0.5f, cy - s * 0.9f, cx, cy - s * 0.32f);
++        heart.cubicTo(cx + s * 0.5f, cy - s * 0.9f, cx + s * 1.0f, cy - s * 0.1f, cx, cy + s * 0.5f);
 +        heart.close();
++    }
++
++    private float heartSize() {
++        return dp(12f);
++    }
++
++    private int maxHearts() {
++        return Math.max(1, hud[1] / 16);
 +    }
 +
 +    @Override
 +    protected void onDraw(Canvas c) {
-+        float w = getWidth(), h = getHeight();
-+        r.set(dp(1), dp(1), w - dp(1), h - dp(1));
-+        c.drawRoundRect(r, h / 2, h / 2, bg);
-+        c.drawRoundRect(r, h / 2, h / 2, border);
++        float hs = heartSize();
++        float step = hs * 2.15f;
++        float x0 = dp(4) + hs;
++        int maxHearts = maxHearts();
++        int perRow = 10;
++        int rows = (maxHearts + perRow - 1) / perRow;
++        float y = dp(4) + hs * 0.95f;
 +
-+        float x = h * 0.55f;
-+        float mid = h / 2;
-+
-+        // Hearts: up to 10 per row, two rows when there are more
-+        int maxHearts = Math.max(1, hud[1] / 16);
++        // Hearts
 +        int health = hud[0];
-+        boolean twoRows = maxHearts > 10;
-+        float hs = twoRows ? dp(8.5f) : dp(11f);
-+        float step = hs * 1.15f;
-+        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE : Color.argb(200, 255, 230, 220));
++        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE : Color.argb(230, 30, 8, 8));
 +        for (int i = 0; i < maxHearts; i++) {
-+            int row = twoRows ? i / 10 : 0;
-+            int col = twoRows ? i % 10 : i;
-+            float cx = x + col * step + hs / 2;
-+            float cy = twoRows ? (mid - hs * 0.55f + row * hs * 1.1f) : mid;
++            float cx = x0 + (i % perRow) * step;
++            float cy = y + (i / perRow) * hs * 1.9f;
 +            heartPath(cx, cy, hs);
 +            c.drawPath(heart, heartEmpty);
++            heartFill.setShader(new RadialGradient(cx - hs * 0.3f, cy - hs * 0.45f, hs * 1.4f, Color.rgb(255, 110, 100),
++                    Color.rgb(170, 18, 24), Shader.TileMode.CLAMP));
 +            int fill = Math.max(0, Math.min(16, health - i * 16));
 +            if (fill >= 16) {
 +                c.drawPath(heart, heartFill);
 +            } else if (fill > 0) {
-+                // Health is stored in 1/16ths of a heart. Use the game's own rounding (z_lifemeter.c):
-+                // 1-5 = quarter, 6-10 = half, 11-15 = three quarters. Fill a pie slice from the top.
++                // the game's own rounding: 1-5 = quarter, 6-10 = half, 11-15 = three quarters
 +                int quarters = fill <= 5 ? 1 : (fill <= 10 ? 2 : 3);
 +                wedge.reset();
 +                wedge.moveTo(cx, cy);
@@ -283,68 +287,82 @@ index 0000000..f0286f5
 +                c.restore();
 +            }
 +            c.drawPath(heart, heartEdge);
++            if (fill > 0) c.drawCircle(cx - hs * 0.42f, cy - hs * 0.38f, hs * 0.16f, heartShine);
 +        }
-+        x += Math.min(maxHearts, 10) * step + dp(10);
++        y += (rows - 1) * hs * 1.9f + hs * 1.25f;
 +
-+        // Magic
++        // Magic: gem cap on the left, gold frame, green fill sized to the meter
 +        if (hud[3] > 0) {
-+            float len = dp(hud[3] * 0.9f);
-+            float bh = dp(7);
-+            r.set(x, mid - bh / 2, x + len, mid + bh / 2);
-+            c.drawRoundRect(r, bh / 2, bh / 2, magicTrack);
-+            r.set(x, mid - bh / 2, x + len * Math.max(0, Math.min(1f, hud[2] / (float) hud[3])), mid + bh / 2);
-+            c.drawRoundRect(r, bh / 2, bh / 2, magicFill);
-+            x += len + dp(12);
++            float barH = dp(9);
++            float gx = x0 - hs * 0.2f;
++            float gs = barH * 0.95f;
++            float left = gx + gs * 0.5f, len = dp(hud[3] * 1.05f);
++            r.set(left, y, left + len, y + barH);
++            c.drawRoundRect(r, barH / 2, barH / 2, frameFill);
++            float frac = Math.max(0f, Math.min(1f, hud[2] / (float) hud[3]));
++            if (frac > 0) {
++                RectF f = new RectF(left + dp(1.5f), y + dp(1.5f), left + dp(1.5f) + (len - dp(3)) * frac, y + barH - dp(1.5f));
++                magicFill.setShader(new LinearGradient(0, f.top, 0, f.bottom, Color.rgb(140, 240, 120), Color.rgb(30, 150, 50),
++                        Shader.TileMode.CLAMP));
++                c.drawRoundRect(f, barH / 2, barH / 2, magicFill);
++            }
++            frame.setShader(new LinearGradient(left, y, left, y + barH,
++                    new int[] { Ornate.GOLD_LIGHT, Ornate.GOLD_MID, Ornate.GOLD_DARK }, null, Shader.TileMode.CLAMP));
++            c.drawRoundRect(r, barH / 2, barH / 2, frame);
++            Ornate.drawGem(c, gx, y + barH / 2, gs, gem, gemEdge);
++            y += barH + dp(6);
++        } else {
++            y += dp(2);
 +        }
 +
-+        c.drawLine(x, mid - dp(9), x, mid + dp(9), divider);
-+        x += dp(12);
-+
-+        // Rupees
-+        float g = dp(6);
-+        heart.reset();
-+        heart.moveTo(x + g, mid - g * 1.3f);
-+        heart.lineTo(x + 2 * g, mid);
-+        heart.lineTo(x + g, mid + g * 1.3f);
-+        heart.lineTo(x, mid);
-+        heart.close();
-+        c.drawPath(heart, gem);
-+        x += 2 * g + dp(6);
++        // Rupees + clock
++        float ty = y + text.getTextSize() * 0.85f;
++        float rx = x0 - hs * 0.4f;
++        float g = dp(5.5f);
++        Path p = new Path();
++        p.moveTo(rx + g, ty - g * 2.1f);
++        p.lineTo(rx + 2 * g, ty - g * 1.1f);
++        p.lineTo(rx + g, ty + g * 0.1f);
++        p.lineTo(rx, ty - g * 1.1f);
++        p.close();
++        rupee.setShader(new LinearGradient(rx, ty - g * 2, rx + 2 * g, ty, Color.rgb(140, 245, 150), Color.rgb(20, 140, 60),
++                Shader.TileMode.CLAMP));
++        c.drawPath(p, rupee);
++        float tx = rx + 2 * g + dp(5);
 +        boolean full = hud[4] >= hud[5] && hud[5] > 0;
-+        text.setColor(full ? Color.rgb(120, 230, 140) : Color.rgb(243, 233, 210));
++        text.setColor(full ? Color.rgb(140, 240, 140) : Ornate.CREAM);
 +        String rupees = String.valueOf(hud[4]);
-+        c.drawText(rupees, x, mid + text.getTextSize() * 0.35f, text);
-+        x += text.measureText(rupees) + dp(12);
-+        text.setColor(Color.rgb(243, 233, 210));
++        c.drawText(rupees, tx, ty, text);
++        tx += text.measureText(rupees) + dp(14);
 +
-+        c.drawLine(x, mid - dp(9), x, mid + dp(9), divider);
-+        x += dp(12);
-+
-+        // Clock: day + time, sun or moon
 +        int minutes = hud[7] * 24 * 60 / 65536;
 +        int hr = minutes / 60, mn = minutes % 60;
 +        boolean night = (hud[8] & 2) != 0;
-+        String ampm = hr < 12 ? "AM" : "PM";
 +        int hr12 = hr % 12 == 0 ? 12 : hr % 12;
 +        int day = Math.max(1, Math.min(3, hud[6]));
-+        String clock = (night ? "\u263E " : "\u2600 ") + "Day " + day + " \u00B7 " + hr12 + ":" + (mn < 10 ? "0" : "") + mn + " " + ampm;
-+        if (day == 3 && night) text.setColor(Color.rgb(240, 120, 100)); // final night: a gentle warning
-+        c.drawText(clock, x, mid + text.getTextSize() * 0.35f, text);
++        String clock = (night ? "\u263E " : "\u2600 ") + "Day " + day + " \u00B7 " + hr12 + ":" + (mn < 10 ? "0" : "") + mn
++                + (hr < 12 ? " AM" : " PM");
++        text.setColor(day == 3 && night ? Color.rgb(250, 130, 110) : Ornate.CREAM); // final night: gentle warning
++        c.drawText(clock, tx, ty, text);
 +    }
 +
-+    /** Width the bar wants for the current values. */
++    /** Width the HUD needs for the current values. */
 +    public int preferredWidth() {
-+        int maxHearts = Math.max(1, hud[1] / 16);
-+        float hs = maxHearts > 10 ? dp(8.5f) : dp(11f);
-+        float w = getHeightGuess() * 0.55f + Math.min(maxHearts, 10) * hs * 1.15f + dp(10);
-+        if (hud[3] > 0) w += dp(hud[3] * 0.9f) + dp(12);
-+        w += dp(24) + dp(18) + text.measureText("9999") + dp(24);
-+        w += text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(18);
-+        return (int) w;
++        float hs = heartSize();
++        float hearts = dp(4) + hs + (Math.min(maxHearts(), 10) - 1) * hs * 2.15f + hs + dp(6);
++        float magic = hud[3] > 0 ? (dp(4) + dp(hud[3] * 1.05f) + dp(12)) : 0;
++        float line = dp(4) + dp(16) + text.measureText("9999") + dp(14) + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(8);
++        return (int) Math.max(hearts, Math.max(magic, line));
 +    }
 +
-+    private float getHeightGuess() {
-+        return dp(36);
++    /** Height the HUD needs for the current values. */
++    public int preferredHeight() {
++        float hs = heartSize();
++        int rows = (maxHearts() + 9) / 10;
++        float h = dp(4) + hs * 0.95f + (rows - 1) * hs * 1.9f + hs * 1.25f;
++        h += hud[3] > 0 ? dp(9) + dp(6) : dp(2);
++        h += text.getTextSize() * 1.3f + dp(4);
++        return (int) h;
 +    }
 +
 +    @Override
@@ -411,10 +429,10 @@ index fe546c8..638daaa 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..3d3cc49
+index 0000000..da2805d
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1883 @@
+@@ -0,0 +1,1902 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -673,7 +691,7 @@ index 0000000..3d3cc49
 +        skipCtl = new Ctl("skip", "Skip \u25B6\u25B6", "", KIND_SKIP, ACT_SKIP, STYLE_PLAIN, 0.500f, 0.860f, 64);
 +        ctls.add(skipCtl);
 +        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
-+        hudCtl = new Ctl("hudbar", "", "", KIND_HUD, 0, STYLE_PLAIN, 0.500f, 0.940f, 36);
++        hudCtl = new Ctl("hudbar", "", "", KIND_HUD, 0, STYLE_PLAIN, 0.150f, 0.120f, 36);
 +        ctls.add(hudCtl);
 +        minimapCtl = new Ctl("minimap", "Map &\ncompass", "", KIND_MINIMAP, 0, STYLE_PLAIN, 0.090f, 0.180f, 80);
 +        ctls.add(minimapCtl);
@@ -697,8 +715,10 @@ index 0000000..3d3cc49
 +        stickZone.setOnTouchListener(this::onStickTouch);
 +        camZone.setOnTouchListener(this::onCamTouch);
 +
-+        stickBase = disc(Color.argb(40, 255, 255, 255), GOLD_SOFT, 2);
-+        stickKnob = disc(Color.argb(120, 255, 255, 255), GOLD, 2);
++        stickBase = new View(act);
++        stickBase.setBackground(new Ornate.StickBaseDrawable());
++        stickKnob = new View(act);
++        stickKnob.setBackground(new Ornate.KnobDrawable());
 +        root.addView(stickBase, new FrameLayout.LayoutParams(dp(STICK_RADIUS_DP * 2 + 20), dp(STICK_RADIUS_DP * 2 + 20)));
 +        root.addView(stickKnob, new FrameLayout.LayoutParams(dp(56), dp(56)));
 +        stickBase.setVisibility(View.GONE);
@@ -910,27 +930,24 @@ index 0000000..3d3cc49
 +
 +    // Buttons: dark glass discs with a coloured rim (blue A, green B, gold C, muted red Start)
 +    // and a faint inner gold ring - Zelda HUD colours without being loud.
++    // Buttons: green glass discs with a gold rim and little gems, like the classic Zelda HUD
 +    private Drawable styleFor(int style, boolean active) {
-+        int rim;
-+        switch (style) {
-+            case STYLE_A: rim = Color.rgb(104, 152, 226); break;
-+            case STYLE_B: rim = Color.rgb(112, 186, 120); break;
-+            case STYLE_C: rim = Color.rgb(222, 186, 84); break;
-+            case STYLE_START: rim = Color.rgb(196, 98, 84); break;
-+            default: rim = active ? Color.rgb(246, 210, 130) : Color.rgb(196, 170, 112); break;
++        return new Ornate.ButtonDrawable(style, active);
++    }
++
++    // Which drawn icon a control shows instead of a text label
++    private int iconFor(Ctl c) {
++        switch (c.id) {
++            case "attack": return Ornate.ICON_SWORD;
++            case "shield": return Ornate.ICON_SHIELD;
++            case "sprint": return Ornate.ICON_RUN;
++            case "jump": return Ornate.ICON_JUMP;
++            case "target": return Ornate.ICON_TARGET;
++            case "map": return Ornate.ICON_MAP;
++            case "more": return Ornate.ICON_DOTS;
++            case "cup": return Ornate.ICON_FAIRY;
++            default: return Ornate.ICON_NONE;
 +        }
-+        GradientDrawable base = new GradientDrawable();
-+        base.setShape(GradientDrawable.OVAL);
-+        base.setColor(active ? Color.argb(190, 120, 86, 32) : Color.argb(150, 16, 14, 24));
-+        base.setStroke(dp(2.5f), rim);
-+        GradientDrawable inner = new GradientDrawable();
-+        inner.setShape(GradientDrawable.OVAL);
-+        inner.setColor(Color.TRANSPARENT);
-+        inner.setStroke(dp(1), Color.argb(70, 255, 240, 200));
-+        LayerDrawable layers = new LayerDrawable(new Drawable[] { base, inner });
-+        int inset = dp(5);
-+        layers.setLayerInset(1, inset, inset, inset, inset);
-+        return layers;
 +    }
 +
 +    private TextView hudText(float sp) {
@@ -960,7 +977,7 @@ index 0000000..3d3cc49
 +        } else {
 +            v.setBackground(styleFor(c.style, false));
 +        }
-+        if (c.kind == KIND_STICK) v.setBackground(discDrawable(Color.argb(35, 255, 255, 255), GOLD_SOFT, 2));
++        if (c.kind == KIND_STICK) v.setBackground(new Ornate.StickBaseDrawable());
 +        if (c.kind == KIND_MINIMAP) {
 +            GradientDrawable box = new GradientDrawable();
 +            box.setColor(Color.argb(60, 63, 182, 168));
@@ -971,7 +988,20 @@ index 0000000..3d3cc49
 +        TextView t = hudText(14);
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
++        if (c.value == N64_A && c.kind == KIND_N64) {
++            t.setTextColor(Ornate.GOLD_LIGHT);
++            t.setText("A");
++        }
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        int iconType = iconFor(c);
++        if (iconType != Ornate.ICON_NONE) {
++            Ornate.IconView iconView = new Ornate.IconView(act, iconType);
++            FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
++            int pad = dp(c.size * 0.22f);
++            iconLp.setMargins(pad, pad, pad, pad);
++            v.addView(iconView, iconLp);
++            t.setVisibility(View.GONE);
++        }
 +        if (c.style == STYLE_C && c.value != N64_CUP && c.kind == KIND_N64) {
 +            ImageView iv = new ImageView(act);
 +            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -986,10 +1016,17 @@ index 0000000..3d3cc49
 +            ammo.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +            ammo.setTextColor(Color.WHITE);
 +            ammo.setShadowLayer(4f, 0f, 1.5f, Color.BLACK);
-+            ammo.setGravity(Gravity.END | Gravity.BOTTOM);
++            ammo.setGravity(Gravity.CENTER);
++            GradientDrawable tag = new GradientDrawable();
++            tag.setColor(Color.argb(210, 16, 18, 16));
++            tag.setCornerRadius(dp(4));
++            tag.setStroke(dp(1), Color.argb(150, 198, 160, 82));
++            ammo.setBackground(tag);
++            ammo.setPadding(dp(4), 0, dp(4), 0);
 +            ammo.setVisibility(View.GONE);
-+            FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-+            alp.setMargins(0, 0, dp(c.size * 0.10f), dp(c.size * 0.04f));
++            FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++            alp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
++            alp.setMargins(0, 0, 0, dp(c.size * 0.12f));
 +            v.addView(ammo, alp);
 +            c.ammo = ammo;
 +        }
@@ -1100,7 +1137,7 @@ index 0000000..3d3cc49
 +                if (count >= 0 && item != 255) {
 +                    c.ammo.setText(String.valueOf(count));
 +                    c.ammo.setTextColor(items[6 + slot] != 0 ? Color.rgb(120, 230, 120) : Color.WHITE);
-+                    c.ammo.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(c.size) * 0.26f);
++                    c.ammo.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(c.size) * 0.2f);
 +                    c.ammo.setVisibility(View.VISIBLE);
 +                } else {
 +                    c.ammo.setVisibility(View.GONE);
@@ -1147,7 +1184,7 @@ index 0000000..3d3cc49
 +        int w = root.getWidth(), h = root.getHeight();
 +        if (w == 0 || h == 0) return;
 +        hudBar.setScale(hudCtl.size / 36f);
-+        int bw = hudBar.preferredWidth(), bh = dp(hudCtl.size);
++        int bw = hudBar.preferredWidth(), bh = hudBar.preferredHeight();
 +        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) hudBar.getLayoutParams();
 +        if (lp == null) return;
 +        int left = (int) (hudCtl.x * w - bw / 2f), top = (int) (hudCtl.y * h - bh / 2f);
@@ -2296,6 +2333,412 @@ index 0000000..3d3cc49
 +
 +    private int dp(float v) {
 +        return Math.round(TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, act.getResources().getDisplayMetrics()));
++    }
++}
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
+new file mode 100644
+index 0000000..acc36ee
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
+@@ -0,0 +1,400 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.ColorFilter;
++import android.graphics.LinearGradient;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.PixelFormat;
++import android.graphics.RadialGradient;
++import android.graphics.Rect;
++import android.graphics.RectF;
++import android.graphics.Shader;
++import android.graphics.drawable.Drawable;
++import android.view.View;
++
++/**
++ * Hand-drawn Zelda-style HUD pieces: gold-rimmed green buttons, an ornate stick,
++ * and simple vector icons (sword, shield, runner...). Everything is drawn in code so it scales cleanly.
++ */
++final class Ornate {
++    private Ornate() {
++    }
++
++    static final int GOLD_DARK = Color.rgb(122, 92, 38);
++    static final int GOLD_MID = Color.rgb(198, 160, 82);
++    static final int GOLD_LIGHT = Color.rgb(246, 222, 150);
++    static final int CREAM = Color.rgb(240, 232, 210);
++    static final int GEM_LIGHT = Color.rgb(120, 230, 150);
++    static final int GEM_DARK = Color.rgb(20, 120, 60);
++
++    // Fill colours per style: { centre, edge }
++    static int[] fillFor(int style, boolean active) {
++        if (active) return new int[] { Color.rgb(176, 132, 52), Color.rgb(96, 64, 20) };
++        switch (style) {
++            case ModTouchOverlay.STYLE_A: return new int[] { Color.rgb(64, 118, 150), Color.rgb(18, 46, 70) };
++            case ModTouchOverlay.STYLE_START: return new int[] { Color.rgb(150, 58, 50), Color.rgb(64, 18, 16) };
++            default: return new int[] { Color.rgb(62, 128, 98), Color.rgb(14, 52, 40) };
++        }
++    }
++
++    static void drawGem(Canvas c, float cx, float cy, float s, Paint fill, Paint edge) {
++        Path p = new Path();
++        p.moveTo(cx, cy - s);
++        p.lineTo(cx + s * 0.75f, cy);
++        p.lineTo(cx, cy + s);
++        p.lineTo(cx - s * 0.75f, cy);
++        p.close();
++        fill.setShader(new LinearGradient(cx, cy - s, cx, cy + s, GEM_LIGHT, GEM_DARK, Shader.TileMode.CLAMP));
++        c.drawPath(p, fill);
++        c.drawPath(p, edge);
++    }
++
++    /** Round button: radial green glass, gold ring and a faint inner ring. */
++    static final class ButtonDrawable extends Drawable {
++        private final int style;
++        private final boolean active;
++        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint inner = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint gloss = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint gem = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint gemEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private int alpha = 255;
++        private final RectF oval = new RectF();
++
++        ButtonDrawable(int style, boolean active) {
++            this.style = style;
++            this.active = active;
++            ring.setStyle(Paint.Style.STROKE);
++            inner.setStyle(Paint.Style.STROKE);
++            gemEdge.setStyle(Paint.Style.STROKE);
++            gemEdge.setColor(GOLD_LIGHT);
++        }
++
++        @Override
++        public void draw(Canvas c) {
++            Rect b = getBounds();
++            float cx = b.exactCenterX(), cy = b.exactCenterY();
++            float r = Math.min(b.width(), b.height()) / 2f;
++            float ringW = r * 0.13f;
++            float rr = r - ringW / 2f - 1;
++
++            int[] f = fillFor(style, active);
++            fill.setShader(new RadialGradient(cx, cy - rr * 0.35f, rr * 1.25f, f[0], f[1], Shader.TileMode.CLAMP));
++            fill.setAlpha((int) (alpha * 0.82f));
++            c.drawCircle(cx, cy, rr, fill);
++
++            // soft highlight across the top
++            gloss.setShader(new LinearGradient(cx, cy - rr, cx, cy, Color.argb(70, 255, 255, 255), Color.TRANSPARENT,
++                    Shader.TileMode.CLAMP));
++            gloss.setAlpha(alpha);
++            oval.set(cx - rr * 0.82f, cy - rr * 0.95f, cx + rr * 0.82f, cy + rr * 0.1f);
++            c.drawOval(oval, gloss);
++
++            inner.setStrokeWidth(Math.max(1f, r * 0.03f));
++            inner.setColor(Color.argb((int) (alpha * 0.45f), 246, 222, 150));
++            c.drawCircle(cx, cy, rr - ringW * 0.9f, inner);
++
++            ring.setStrokeWidth(ringW);
++            ring.setShader(new LinearGradient(cx - rr, cy - rr, cx + rr, cy + rr,
++                    new int[] { GOLD_LIGHT, GOLD_MID, GOLD_DARK, GOLD_MID, GOLD_LIGHT }, null, Shader.TileMode.CLAMP));
++            ring.setAlpha(alpha);
++            c.drawCircle(cx, cy, rr, ring);
++
++        }
++
++        @Override
++        public void setAlpha(int a) {
++            alpha = a;
++            invalidateSelf();
++        }
++
++        @Override
++        public void setColorFilter(ColorFilter cf) {
++        }
++
++        @Override
++        public int getOpacity() {
++            return PixelFormat.TRANSLUCENT;
++        }
++    }
++
++    /** Movement stick ring: dark glass, gold rim and direction arrows. */
++    static final class StickBaseDrawable extends Drawable {
++        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint arrow = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint gem = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint gemEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private int alpha = 255;
++
++        StickBaseDrawable() {
++            ring.setStyle(Paint.Style.STROKE);
++            gemEdge.setStyle(Paint.Style.STROKE);
++            gemEdge.setColor(GOLD_LIGHT);
++            arrow.setColor(CREAM);
++        }
++
++        @Override
++        public void draw(Canvas c) {
++            Rect b = getBounds();
++            float cx = b.exactCenterX(), cy = b.exactCenterY();
++            float r = Math.min(b.width(), b.height()) / 2f;
++            float rr = r * 0.9f;
++            fill.setShader(new RadialGradient(cx, cy, rr, Color.argb(90, 60, 70, 64), Color.argb(150, 20, 26, 24),
++                    Shader.TileMode.CLAMP));
++            fill.setAlpha(alpha);
++            c.drawCircle(cx, cy, rr, fill);
++            ring.setStrokeWidth(r * 0.06f);
++            ring.setShader(new LinearGradient(cx - rr, cy - rr, cx + rr, cy + rr,
++                    new int[] { GOLD_LIGHT, GOLD_MID, GOLD_DARK, GOLD_MID, GOLD_LIGHT }, null, Shader.TileMode.CLAMP));
++            ring.setAlpha(alpha);
++            c.drawCircle(cx, cy, rr, ring);
++            ring.setStrokeWidth(r * 0.015f);
++            c.drawCircle(cx, cy, rr * 0.86f, ring);
++
++            arrow.setAlpha((int) (alpha * 0.75f));
++            float a = r * 0.09f, d = rr * 0.68f;
++            for (int i = 0; i < 4; i++) {
++                c.save();
++                c.rotate(90f * i, cx, cy);
++                Path p = new Path();
++                p.moveTo(cx, cy - d - a);
++                p.lineTo(cx + a, cy - d + a * 0.4f);
++                p.lineTo(cx - a, cy - d + a * 0.4f);
++                p.close();
++                c.drawPath(p, arrow);
++                c.restore();
++            }
++        }
++
++        @Override
++        public void setAlpha(int a) {
++            alpha = a;
++            invalidateSelf();
++        }
++
++        @Override
++        public void setColorFilter(ColorFilter cf) {
++        }
++
++        @Override
++        public int getOpacity() {
++            return PixelFormat.TRANSLUCENT;
++        }
++    }
++
++    /** Stick knob: brushed metal disc with a thin gold edge. */
++    static final class KnobDrawable extends Drawable {
++        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private int alpha = 255;
++
++        KnobDrawable() {
++            edge.setStyle(Paint.Style.STROKE);
++        }
++
++        @Override
++        public void draw(Canvas c) {
++            Rect b = getBounds();
++            float cx = b.exactCenterX(), cy = b.exactCenterY();
++            float r = Math.min(b.width(), b.height()) / 2f * 0.92f;
++            fill.setShader(new RadialGradient(cx - r * 0.25f, cy - r * 0.3f, r * 1.3f, Color.rgb(232, 226, 210),
++                    Color.rgb(120, 114, 100), Shader.TileMode.CLAMP));
++            fill.setAlpha(alpha);
++            c.drawCircle(cx, cy, r, fill);
++            edge.setStrokeWidth(r * 0.08f);
++            edge.setColor(GOLD_MID);
++            edge.setAlpha(alpha);
++            c.drawCircle(cx, cy, r, edge);
++        }
++
++        @Override
++        public void setAlpha(int a) {
++            alpha = a;
++            invalidateSelf();
++        }
++
++        @Override
++        public void setColorFilter(ColorFilter cf) {
++        }
++
++        @Override
++        public int getOpacity() {
++            return PixelFormat.TRANSLUCENT;
++        }
++    }
++
++    // ------------------------------------------------------------------ icons
++    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
++            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8;
++
++    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
++    static final class IconView extends View {
++        private final int icon;
++        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Paint accent = new Paint(Paint.ANTI_ALIAS_FLAG);
++        private final Path p = new Path();
++
++        IconView(Context ctx, int icon) {
++            super(ctx);
++            this.icon = icon;
++            fill.setColor(CREAM);
++            stroke.setColor(CREAM);
++            stroke.setStyle(Paint.Style.STROKE);
++            stroke.setStrokeCap(Paint.Cap.ROUND);
++            stroke.setStrokeJoin(Paint.Join.ROUND);
++            accent.setStyle(Paint.Style.STROKE);
++            accent.setColor(Color.rgb(40, 90, 80));
++        }
++
++        @Override
++        protected void onDraw(Canvas c) {
++            float w = getWidth(), h = getHeight();
++            float s = Math.min(w, h);
++            float ox = (w - s) / 2f, oy = (h - s) / 2f;
++            float sh = s * 0.02f;
++            fill.setShadowLayer(s * 0.04f, 0, sh, Color.argb(160, 0, 0, 0));
++            stroke.setShadowLayer(s * 0.04f, 0, sh, Color.argb(160, 0, 0, 0));
++            stroke.setStrokeWidth(s * 0.075f);
++            c.save();
++            c.translate(ox, oy);
++            switch (icon) {
++                case ICON_SWORD: sword(c, s); break;
++                case ICON_SHIELD: shield(c, s); break;
++                case ICON_RUN: run(c, s); break;
++                case ICON_JUMP: jump(c, s); break;
++                case ICON_TARGET: target(c, s); break;
++                case ICON_MAP: map(c, s); break;
++                case ICON_DOTS: dots(c, s); break;
++                case ICON_FAIRY: fairy(c, s); break;
++            }
++            c.restore();
++        }
++
++        private void sword(Canvas c, float s) {
++            c.save();
++            c.rotate(45f, s / 2f, s / 2f);
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.08f);
++            p.lineTo(s * 0.56f, s * 0.2f);
++            p.lineTo(s * 0.56f, s * 0.62f);
++            p.lineTo(s * 0.44f, s * 0.62f);
++            p.lineTo(s * 0.44f, s * 0.2f);
++            p.close();
++            c.drawPath(p, fill);
++            c.drawRect(s * 0.3f, s * 0.62f, s * 0.7f, s * 0.68f, fill);
++            c.drawRect(s * 0.465f, s * 0.68f, s * 0.535f, s * 0.84f, fill);
++            c.drawCircle(s * 0.5f, s * 0.88f, s * 0.05f, fill);
++            c.restore();
++        }
++
++        private void shield(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.22f, s * 0.2f);
++            p.quadTo(s * 0.5f, s * 0.12f, s * 0.78f, s * 0.2f);
++            p.quadTo(s * 0.8f, s * 0.62f, s * 0.5f, s * 0.88f);
++            p.quadTo(s * 0.2f, s * 0.62f, s * 0.22f, s * 0.2f);
++            p.close();
++            c.drawPath(p, fill);
++            accent.setStrokeWidth(s * 0.035f);
++            p.reset();
++            p.moveTo(s * 0.3f, s * 0.27f);
++            p.quadTo(s * 0.5f, s * 0.21f, s * 0.7f, s * 0.27f);
++            p.quadTo(s * 0.71f, s * 0.6f, s * 0.5f, s * 0.79f);
++            p.quadTo(s * 0.29f, s * 0.6f, s * 0.3f, s * 0.27f);
++            c.drawPath(p, accent);
++        }
++
++        private void run(Canvas c, float s) {
++            c.drawCircle(s * 0.6f, s * 0.2f, s * 0.08f, fill);
++            p.reset();
++            p.moveTo(s * 0.56f, s * 0.32f);
++            p.lineTo(s * 0.46f, s * 0.56f);
++            p.moveTo(s * 0.53f, s * 0.38f);
++            p.lineTo(s * 0.7f, s * 0.48f);
++            p.moveTo(s * 0.53f, s * 0.38f);
++            p.lineTo(s * 0.36f, s * 0.34f);
++            p.moveTo(s * 0.46f, s * 0.56f);
++            p.lineTo(s * 0.62f, s * 0.7f);
++            p.lineTo(s * 0.58f, s * 0.86f);
++            p.moveTo(s * 0.46f, s * 0.56f);
++            p.lineTo(s * 0.33f, s * 0.7f);
++            p.lineTo(s * 0.2f, s * 0.67f);
++            c.drawPath(p, stroke);
++        }
++
++        private void jump(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.14f);
++            p.lineTo(s * 0.7f, s * 0.38f);
++            p.lineTo(s * 0.57f, s * 0.38f);
++            p.lineTo(s * 0.57f, s * 0.66f);
++            p.lineTo(s * 0.43f, s * 0.66f);
++            p.lineTo(s * 0.43f, s * 0.38f);
++            p.lineTo(s * 0.3f, s * 0.38f);
++            p.close();
++            c.drawPath(p, fill);
++            p.reset();
++            p.moveTo(s * 0.26f, s * 0.82f);
++            p.lineTo(s * 0.74f, s * 0.82f);
++            c.drawPath(p, stroke);
++        }
++
++        private void target(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.06f);
++            c.drawCircle(s * 0.5f, s * 0.5f, s * 0.26f, stroke);
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.12f);
++            p.lineTo(s * 0.5f, s * 0.3f);
++            p.moveTo(s * 0.5f, s * 0.7f);
++            p.lineTo(s * 0.5f, s * 0.88f);
++            p.moveTo(s * 0.12f, s * 0.5f);
++            p.lineTo(s * 0.3f, s * 0.5f);
++            p.moveTo(s * 0.7f, s * 0.5f);
++            p.lineTo(s * 0.88f, s * 0.5f);
++            c.drawPath(p, stroke);
++            c.drawCircle(s * 0.5f, s * 0.5f, s * 0.05f, fill);
++        }
++
++        private void map(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.16f, s * 0.28f);
++            p.lineTo(s * 0.38f, s * 0.2f);
++            p.lineTo(s * 0.62f, s * 0.28f);
++            p.lineTo(s * 0.84f, s * 0.2f);
++            p.lineTo(s * 0.84f, s * 0.74f);
++            p.lineTo(s * 0.62f, s * 0.82f);
++            p.lineTo(s * 0.38f, s * 0.74f);
++            p.lineTo(s * 0.16f, s * 0.82f);
++            p.close();
++            c.drawPath(p, fill);
++            accent.setStrokeWidth(s * 0.03f);
++            p.reset();
++            p.moveTo(s * 0.38f, s * 0.2f);
++            p.lineTo(s * 0.38f, s * 0.74f);
++            p.moveTo(s * 0.62f, s * 0.28f);
++            p.lineTo(s * 0.62f, s * 0.82f);
++            c.drawPath(p, accent);
++        }
++
++        private void dots(Canvas c, float s) {
++            for (int i = -1; i <= 1; i++) c.drawCircle(s * (0.5f + i * 0.2f), s * 0.5f, s * 0.07f, fill);
++        }
++
++        private void fairy(Canvas c, float s) {
++            Paint wing = new Paint(Paint.ANTI_ALIAS_FLAG);
++            wing.setColor(Color.argb(170, 210, 225, 255));
++            c.drawOval(new RectF(s * 0.18f, s * 0.22f, s * 0.48f, s * 0.48f), wing);
++            c.drawOval(new RectF(s * 0.52f, s * 0.22f, s * 0.82f, s * 0.48f), wing);
++            Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
++            glow.setShader(new RadialGradient(s * 0.5f, s * 0.55f, s * 0.3f, Color.WHITE, Color.argb(0, 255, 250, 200),
++                    Shader.TileMode.CLAMP));
++            c.drawCircle(s * 0.5f, s * 0.55f, s * 0.3f, glow);
++        }
 +    }
 +}
 diff --git a/mm/2s2h/Enhancements/Touch/MMExitGraph.c b/mm/2s2h/Enhancements/Touch/MMExitGraph.c
