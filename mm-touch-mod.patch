@@ -1,9 +1,9 @@
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..5b6d7d9
+index 0000000..7c2bb39
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,209 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -38,26 +38,42 @@ index 0000000..5b6d7d9
 +
 +    // health (1/16 hearts), max health, magic, max magic, rupees, wallet, day, time, flags
 +    private int[] hud = new int[9];
++    private float scale = 1f;
++    private final Path wedge = new Path();
++    private final RectF arc = new RectF();
 +
 +    public HudBarView(Context c) {
 +        super(c);
++        applySizes();
 +        bg.setColor(Color.argb(170, 14, 12, 22));
 +        border.setStyle(Paint.Style.STROKE);
-+        border.setStrokeWidth(dp(1.5f));
 +        border.setColor(Color.argb(150, 222, 190, 110));
 +        heartFill.setColor(Color.rgb(214, 58, 52));
 +        heartEmpty.setColor(Color.argb(110, 60, 20, 24));
 +        heartEdge.setStyle(Paint.Style.STROKE);
-+        heartEdge.setStrokeWidth(dp(1));
 +        heartEdge.setColor(Color.argb(200, 255, 230, 220));
 +        magicFill.setColor(Color.rgb(70, 190, 90));
 +        magicTrack.setColor(Color.argb(120, 20, 40, 24));
 +        text.setColor(Color.rgb(243, 233, 210));
 +        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-+        text.setTextSize(dp(13));
-+        text.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
 +        gem.setColor(Color.rgb(80, 200, 110));
 +        divider.setColor(Color.argb(90, 222, 190, 110));
++        applySizes();
++    }
++
++    /** 1.0 = default size; Edit controls pinch changes this. */
++    public void setScale(float k) {
++        if (Math.abs(k - scale) < 0.01f) return;
++        scale = k;
++        applySizes();
++        invalidate();
++    }
++
++    private void applySizes() {
++        border.setStrokeWidth(dp(1.5f));
++        heartEdge.setStrokeWidth(dp(1));
++        text.setTextSize(dp(13));
++        text.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
 +        divider.setStrokeWidth(dp(1));
 +    }
 +
@@ -75,7 +91,7 @@ index 0000000..5b6d7d9
 +    }
 +
 +    private float dp(float v) {
-+        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++        return scale * TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
 +    }
 +
 +    private void heartPath(float cx, float cy, float s) {
@@ -111,9 +127,18 @@ index 0000000..5b6d7d9
 +            heartPath(cx, cy, hs);
 +            c.drawPath(heart, heartEmpty);
 +            int fill = Math.max(0, Math.min(16, health - i * 16));
-+            if (fill > 0) {
++            if (fill >= 16) {
++                c.drawPath(heart, heartFill);
++            } else if (fill > 0) {
++                // Health is stored in 1/16ths; the game shows it in quarters. Fill a pie slice from the top.
++                int quarters = Math.max(1, (fill + 3) / 4);
++                wedge.reset();
++                wedge.moveTo(cx, cy);
++                arc.set(cx - hs * 2, cy - hs * 2, cx + hs * 2, cy + hs * 2);
++                wedge.arcTo(arc, -90f, 90f * quarters);
++                wedge.close();
 +                c.save();
-+                c.clipRect(cx - hs, cy - hs, cx - hs + 2 * hs * fill / 16f, cy + hs);
++                c.clipPath(wedge);
 +                c.drawPath(heart, heartFill);
 +                c.restore();
 +            }
@@ -181,9 +206,15 @@ index 0000000..5b6d7d9
 +    private float getHeightGuess() {
 +        return dp(36);
 +    }
++
++    @Override
++    protected void onSizeChanged(int w, int h, int ow, int oh) {
++        super.onSizeChanged(w, h, ow, oh);
++        invalidate();
++    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..89b3d71 100644
+index 287c258..4ea122b 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,9 @@ public class MainActivity extends SDLActivity{
@@ -196,7 +227,18 @@ index fe546c8..89b3d71 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +958,22 @@ public class MainActivity extends SDLActivity{
+@@ -299,10 +302,6 @@ public class MainActivity extends SDLActivity{
+     }
+ 
+     private File getDefaultDataRootFolder() {
+-        if (BuildConfig.APPLICATION_ID.equals("com.twoshipfork.mm.performancetest") ||
+-                BuildConfig.APPLICATION_ID.equals("com.twoshipfork.mm.performancetestci")) {
+-            return new File(Environment.getExternalStorageDirectory(), "2S2H-performance-test");
+-        }
+         return new File(Environment.getExternalStorageDirectory(), "2S2H");
+     }
+ 
+@@ -959,6 +958,24 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -215,11 +257,13 @@ index fe546c8..89b3d71 100644
 +    public native void nativeMmPauseSelect(int slot);
 +    public native void nativeMmSetOption(int option, int value);
 +    public native int[] nativeMmGetHud();
++    public native int[] nativeMmGetPauseInfo();
++    public native void nativeMmSetMinimap(int visible, int x, int y, int scale);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +981,8 @@ public class MainActivity extends SDLActivity{
+@@ -966,7 +983,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -231,10 +275,10 @@ index fe546c8..89b3d71 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..6d07f39
+index 0000000..99fcb03
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1480 @@
+@@ -0,0 +1,1739 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -280,7 +324,8 @@ index 0000000..6d07f39
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
 +            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256;
 +
-+    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5;
++    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
++            KIND_HUD = 6, KIND_MINIMAP = 7;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -391,13 +436,13 @@ index 0000000..6d07f39
 +    // Item icons (from the game's own textures) for the C buttons and the touch pause grid
 +    private final HashMap<Integer, Bitmap> iconCache = new HashMap<>();
 +    private LinearLayout pausePanel, pauseGridBox;
-+    private TextView pauseTitle, pauseHint, pauseItemName;
++    private TextView pauseHint, pauseItemName;
 +    private boolean touchOnlyPause;
 +    private boolean modernHud;
 +    private HudBarView hudBar;
++    private Ctl hudCtl, minimapCtl;
 +    private TextView hudTypeLabel;
 +    private TextView pauseTypeLabel;
-+    private final TextView[] gridLabels = new TextView[24];
 +    private final ImageView[] gridIcons = new ImageView[24];
 +    private final FrameLayout[] gridTiles = new FrameLayout[24];
 +    private final int[] gridShown = new int[24];
@@ -444,6 +489,7 @@ index 0000000..6d07f39
 +        View view;
 +        TextView text;
 +        ImageView icon;
++        TextView ammo;
 +        int shownItem = -2;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
@@ -487,6 +533,10 @@ index 0000000..6d07f39
 +        skipCtl = new Ctl("skip", "Skip \u25B6\u25B6", "", KIND_SKIP, ACT_SKIP, STYLE_PLAIN, 0.500f, 0.860f, 64);
 +        ctls.add(skipCtl);
 +        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
++        hudCtl = new Ctl("hudbar", "", "", KIND_HUD, 0, STYLE_PLAIN, 0.500f, 0.940f, 36);
++        ctls.add(hudCtl);
++        minimapCtl = new Ctl("minimap", "Map &\ncompass", "", KIND_MINIMAP, 0, STYLE_PLAIN, 0.090f, 0.180f, 80);
++        ctls.add(minimapCtl);
 +        ctls.add(questCtl);
 +    }
 +
@@ -517,12 +567,13 @@ index 0000000..6d07f39
 +        if (prefs.getInt("layoutVersion", 1) < 2) {
 +            prefs.edit().remove("ctl_start").remove("ctl_map").putInt("layoutVersion", 2).apply();
 +        }
++        buildHudBar();
 +        for (Ctl c : ctls) {
 +            loadCtl(c);
 +            if (c.kind == KIND_PANEL) buildQuestPanel(c);
++            else if (c.kind == KIND_HUD) attachHudCtl(c);
 +            else buildCtl(c);
 +        }
-+        buildHudBar();
 +        buildSongsPanel();
 +        buildPausePanel();
 +        buildSettingsPanel();
@@ -531,7 +582,10 @@ index 0000000..6d07f39
 +        buildToast();
 +        buildCloseMenuButton();
 +
-+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> layoutAll());
++        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
++            layoutAll();
++            if (r - l != orr - ol || b - t != ob - ot) pushMinimap();
++        });
 +        act.nativeMmSetOverlayActive(true);
 +        act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
 +        act.nativeMmSetOption(2, modernHud ? 1 : 0);
@@ -549,7 +603,8 @@ index 0000000..6d07f39
 +            boolean idle = !editing && System.currentTimeMillis() - lastTouch > IDLE_FADE_MS;
 +            float target = controlsHidden ? 0f : (idle ? opacity * 0.3f : opacity);
 +            for (Ctl c : ctls) {
-+                if (c.view == null || c.kind == KIND_PANEL || c.kind == KIND_SKIP || (editing && c.hidden)) continue;
++                if (c.view == null || c.kind == KIND_PANEL || c.kind == KIND_SKIP || c.kind == KIND_HUD
++                        || c.kind == KIND_MINIMAP || (editing && c.hidden)) continue;
 +                float t = (c.kind == KIND_TRAY) ? Math.max(target, 0.35f) : target; // keep "..." findable
 +                if (Math.abs(c.view.getAlpha() - t) > 0.01f) c.view.animate().alpha(t).setDuration(250).start();
 +            }
@@ -738,11 +793,18 @@ index 0000000..6d07f39
 +            v.setBackground(styleFor(c.style, false));
 +        }
 +        if (c.kind == KIND_STICK) v.setBackground(discDrawable(Color.argb(35, 255, 255, 255), GOLD_SOFT, 2));
++        if (c.kind == KIND_MINIMAP) {
++            GradientDrawable box = new GradientDrawable();
++            box.setColor(Color.argb(60, 63, 182, 168));
++            box.setCornerRadius(dp(8));
++            box.setStroke(dp(2), Color.rgb(63, 182, 168), dp(6), dp(4));
++            v.setBackground(box);
++        }
 +        TextView t = hudText(14);
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-+        if (c.style == STYLE_C && c.value != N64_CUP) {
++        if (c.style == STYLE_C && c.value != N64_CUP && c.kind == KIND_N64) {
 +            ImageView iv = new ImageView(act);
 +            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
 +            iv.setVisibility(View.GONE);
@@ -751,6 +813,17 @@ index 0000000..6d07f39
 +            ilp.setMargins(pad, pad, pad, pad);
 +            v.addView(iv, ilp);
 +            c.icon = iv;
++            // ammo count, bottom-right like the game's own C buttons
++            TextView ammo = new TextView(act);
++            ammo.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++            ammo.setTextColor(Color.WHITE);
++            ammo.setShadowLayer(4f, 0f, 1.5f, Color.BLACK);
++            ammo.setGravity(Gravity.END | Gravity.BOTTOM);
++            ammo.setVisibility(View.GONE);
++            FrameLayout.LayoutParams alp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
++            alp.setMargins(0, 0, dp(c.size * 0.10f), dp(c.size * 0.04f));
++            v.addView(ammo, alp);
++            c.ammo = ammo;
 +        }
 +        c.view = v;
 +        c.text = t;
@@ -854,6 +927,17 @@ index 0000000..6d07f39
 +            if (c.icon == null) continue;
 +            int slot = c.value == N64_CLEFT ? 0 : (c.value == N64_CDOWN ? 1 : 2);
 +            int item = items[slot];
++            if (items.length >= 9 && c.ammo != null) {
++                int count = items[3 + slot];
++                if (count >= 0 && item != 255) {
++                    c.ammo.setText(String.valueOf(count));
++                    c.ammo.setTextColor(items[6 + slot] != 0 ? Color.rgb(120, 230, 120) : Color.WHITE);
++                    c.ammo.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(c.size) * 0.26f);
++                    c.ammo.setVisibility(View.VISIBLE);
++                } else {
++                    c.ammo.setVisibility(View.GONE);
++                }
++            }
 +            if (item == c.shownItem && !(item != 255 && !iconCache.containsKey(item))) continue;
 +            Bitmap bmp = iconFor(item);
 +            if (bmp == null && item != 255 && !iconCache.containsKey(item)) continue; // not loaded yet
@@ -872,27 +956,71 @@ index 0000000..6d07f39
 +    // ---------------------------------------------------------------- slim HUD bar
 +    private void buildHudBar() {
 +        hudBar = new HudBarView(act);
-+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(420), dp(36));
-+        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
-+        lp.bottomMargin = dp(8);
-+        root.addView(hudBar, lp);
 +        hudBar.setVisibility(View.GONE);
 +    }
 +
++    private void attachHudCtl(Ctl c) {
++        c.view = hudBar;
++        hudBar.setOnTouchListener((view, e) -> editing ? onCtlEdit(c, e) : false);
++        root.addView(hudBar, new FrameLayout.LayoutParams(dp(420), dp(36)));
++    }
++
 +    private void updateHudBar() {
-+        boolean show = modernHud && !editing && ((stateBits & ST_GAMEPLAY) != 0);
++        boolean show = editing || (modernHud && !hudCtl.hidden && !controlsHidden && ((stateBits & ST_GAMEPLAY) != 0));
++        if (editing && !modernHud) show = false;
 +        hudBar.setVisibility(show ? View.VISIBLE : View.GONE);
 +        if (!show) return;
-+        hudBar.setHud(act.nativeMmGetHud());
-+        int want = hudBar.preferredWidth();
++        int[] hud = act.nativeMmGetHud();
++        if (hud != null) hudBar.setHud(hud);
++        layoutHudBar();
++    }
++
++    private void layoutHudBar() {
++        int w = root.getWidth(), h = root.getHeight();
++        if (w == 0 || h == 0) return;
++        hudBar.setScale(hudCtl.size / 36f);
++        int bw = hudBar.preferredWidth(), bh = dp(hudCtl.size);
 +        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) hudBar.getLayoutParams();
-+        if (Math.abs(lp.width - want) > dp(4)) {
-+            lp.width = want;
++        if (lp == null) return;
++        int left = (int) (hudCtl.x * w - bw / 2f), top = (int) (hudCtl.y * h - bh / 2f);
++        if (lp.width != bw || lp.height != bh || lp.leftMargin != left || lp.topMargin != top) {
++            lp.width = bw;
++            lp.height = bh;
++            lp.leftMargin = left;
++            lp.topMargin = top;
 +            hudBar.setLayoutParams(lp);
 +        }
 +    }
 +
++    // Send the dungeon map/compass position to the game (2 Ship's HUD editor values, in game units).
++    private void pushMinimap() {
++        int w = root.getWidth(), h = root.getHeight();
++        if (w == 0 || h == 0) return;
++        float px = dp(minimapCtl.size);
++        float right = minimapCtl.x * w + px / 2f, bottom = minimapCtl.y * h + px / 2f;
++        int gx = Math.round(right / h * 240f);
++        int gy = Math.round(bottom / h * 240f);
++        act.nativeMmSetMinimap(minimapCtl.hidden ? 0 : 1, gx, gy, Math.round(minimapCtl.size / 80f * 100f));
++    }
++
 +    // ---------------------------------------------------------------- touch pause menu
++    // Touch pause menu: tabs for the four pages; the game's own pages are hidden (Touch only) and
++    // each page has a touch-friendly version here.
++    private static final String[] TAB_NAMES = { "Items", "Map", "Quest", "Masks" };
++    private static final String[] OWL_NAMES = { "Great Bay Coast", "Zora Cape", "Snowhead", "Mountain Village",
++            "Clock Town", "Milk Road", "Woodfall", "Southern Swamp", "Ikana Canyon", "Stone Tower" };
++    private static final String[] DUNGEON_NAMES = { "Woodfall Temple", "Snowhead Temple", "Great Bay Temple",
++            "Stone Tower Temple" };
++    private static final String[] SONG_NAMES = { "Sonata of Awakening", "Goron Lullaby", "New Wave Bossa Nova",
++            "Elegy of Emptiness", "Oath to Order", "", "Song of Time", "Song of Healing", "Epona's Song",
++            "Song of Soaring", "Song of Storms" }; // quest bits 6..16
++
++    private final TextView[] tabs = new TextView[4];
++    private LinearLayout gridContent, mapContent, questContent;
++    private String lastMapKey = "", lastQuestKey = "";
++    private int pageTarget = -1;
++    private long pageSwitchUntil = 0;
++
 +    private void buildPausePanel() {
 +        pausePanel = new LinearLayout(act);
 +        pausePanel.setOrientation(LinearLayout.VERTICAL);
@@ -902,17 +1030,23 @@ index 0000000..6d07f39
 +
 +        LinearLayout top = new LinearLayout(act);
 +        top.setGravity(Gravity.CENTER_VERTICAL);
-+        top.addView(pauseButton("\u25C0 Z", v -> tapN64(N64_Z)));
-+        pauseTitle = new TextView(act);
-+        pauseTitle.setTextColor(GOLD);
-+        pauseTitle.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-+        pauseTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-+        pauseTitle.setGravity(Gravity.CENTER);
-+        top.addView(pauseTitle, new LinearLayout.LayoutParams(dp(150), ViewGroup.LayoutParams.WRAP_CONTENT));
-+        top.addView(pauseButton("R \u25B6", v -> tapN64(N64_R)));
-+        top.addView(pauseButton("\u2715 Close", v -> tapN64(N64_START)));
++        for (int i = 0; i < 4; i++) {
++            final int page = i;
++            TextView t = pauseButton(TAB_NAMES[i], v -> goToPage(page));
++            tabs[i] = t;
++            top.addView(t);
++        }
++        View spacer = new View(act);
++        top.addView(spacer, new LinearLayout.LayoutParams(dp(16), 1));
++        top.addView(pauseButton("\u2715", v -> tapN64(N64_START)));
 +        pausePanel.addView(top);
 +
++        FrameLayout content = new FrameLayout(act);
++        pausePanel.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++
++        // Items / Masks grid
++        gridContent = new LinearLayout(act);
++        gridContent.setOrientation(LinearLayout.VERTICAL);
 +        pauseGridBox = new LinearLayout(act);
 +        pauseGridBox.setOrientation(LinearLayout.VERTICAL);
 +        for (int r = 0; r < 4; r++) {
@@ -930,42 +1064,43 @@ index 0000000..6d07f39
 +                FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
 +                ilp.setMargins(dp(5), dp(5), dp(5), dp(5));
 +                tile.addView(iv, ilp);
-+                TextView lbl = new TextView(act);
-+                lbl.setTextColor(Color.argb(160, 255, 255, 255));
-+                lbl.setGravity(Gravity.CENTER);
-+                lbl.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
-+                tile.addView(lbl, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 +                tile.setOnClickListener(v -> {
 +                    touched();
 +                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
 +                    act.nativeMmPauseSelect(slot);
 +                });
-+                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(54), dp(54));
++                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(52), dp(52));
 +                tlp.setMargins(dp(3), dp(3), dp(3), dp(3));
 +                row.addView(tile, tlp);
 +                gridTiles[slot] = tile;
 +                gridIcons[slot] = iv;
-+                gridLabels[slot] = lbl;
 +                gridShown[slot] = -2;
 +            }
 +            pauseGridBox.addView(row);
 +        }
-+        pausePanel.addView(pauseGridBox);
-+
++        gridContent.addView(pauseGridBox);
 +        pauseItemName = new TextView(act);
-+        pauseItemName.setTextColor(Color.WHITE);
++        pauseItemName.setTextColor(Color.rgb(243, 233, 210));
 +        pauseItemName.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +        pauseItemName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
 +        pauseItemName.setGravity(Gravity.CENTER);
 +        pauseItemName.setPadding(0, dp(6), 0, 0);
-+        pausePanel.addView(pauseItemName);
-+
++        gridContent.addView(pauseItemName);
 +        pauseHint = new TextView(act);
-+        pauseHint.setText("Tap an item, then tap a C button to put it there \u00B7 A = description");
++        pauseHint.setText("Tap an item, then tap a C button to equip it \u00B7 A = description");
 +        pauseHint.setTextColor(Color.argb(190, 255, 255, 255));
 +        pauseHint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-+        pauseHint.setPadding(dp(4), dp(6), 0, 0);
-+        pausePanel.addView(pauseHint);
++        pauseHint.setGravity(Gravity.CENTER);
++        pauseHint.setPadding(dp(4), dp(4), 0, 0);
++        gridContent.addView(pauseHint);
++        content.addView(gridContent);
++
++        mapContent = new LinearLayout(act);
++        mapContent.setOrientation(LinearLayout.VERTICAL);
++        content.addView(mapContent);
++        questContent = new LinearLayout(act);
++        questContent.setOrientation(LinearLayout.VERTICAL);
++        content.addView(questContent);
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
 +        lp.gravity = Gravity.CENTER;
@@ -983,23 +1118,178 @@ index 0000000..6d07f39
 +        return b;
 +    }
 +
++    // Pages turn with Z (left) / R (right); press the shorter way round until we arrive.
++    private int currentPage = -1;
++
++    private void goToPage(int target) {
++        if (currentPage < 0 || target == currentPage) return;
++        pageTarget = target;
++        pageSwitchUntil = System.currentTimeMillis() + 4000;
++        stepPage();
++    }
++
++    private void stepPage() {
++        if (pageTarget < 0 || currentPage < 0) return;
++        if (pageTarget == currentPage || System.currentTimeMillis() > pageSwitchUntil) {
++            pageTarget = -1;
++            return;
++        }
++        int right = (pageTarget - currentPage + 4) % 4;
++        tapN64(right <= 2 ? N64_R : N64_Z);
++        handler.postDelayed(this::stepPage, 450);
++    }
++
++    private TextView infoLine(String text, float sp, int color, boolean serif) {
++        TextView t = new TextView(act);
++        t.setText(text);
++        t.setTextColor(color);
++        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
++        t.setTypeface(serif ? Typeface.create(Typeface.SERIF, Typeface.BOLD) : Typeface.DEFAULT_BOLD);
++        t.setPadding(dp(4), dp(3), dp(4), dp(3));
++        return t;
++    }
++
++    private boolean iconPending = false;
++
++    private LinearLayout iconRow(int[] items, boolean[] have, String[] captions) {
++        LinearLayout row = new LinearLayout(act);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        for (int i = 0; i < items.length; i++) {
++            LinearLayout cell = new LinearLayout(act);
++            cell.setOrientation(LinearLayout.VERTICAL);
++            cell.setGravity(Gravity.CENTER);
++            ImageView iv = new ImageView(act);
++            iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
++            Bitmap bmp = items[i] >= 0 ? iconFor(items[i]) : null;
++            if (bmp == null && items[i] >= 0 && !iconCache.containsKey(items[i])) iconPending = true; // still loading
++            iv.setImageBitmap(bmp);
++            iv.setAlpha(have[i] ? 1f : 0.22f);
++            cell.addView(iv, new LinearLayout.LayoutParams(dp(42), dp(42)));
++            if (captions != null) {
++                TextView cap = infoLine(captions[i], 11, have[i] ? Color.rgb(243, 233, 210) : Color.argb(120, 243, 233, 210), false);
++                cap.setGravity(Gravity.CENTER);
++                cell.addView(cap);
++            }
++            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(78), ViewGroup.LayoutParams.WRAP_CONTENT);
++            row.addView(cell, clp);
++        }
++        return row;
++    }
++
++    private void rebuildMapPage(int[] info) {
++        // info: [0]=page [1]=quest [2]=heart pieces [3]=sword [4]=shield [5]=quiver [6]=bombbag [7]=wallet
++        //       [8]=owls [9]=dungeon [10]=map [11]=compass [12]=boss key [13]=keys [14]=fairies
++        StringBuilder key = new StringBuilder();
++        for (int v : info) key.append(v).append(',');
++        if (key.toString().equals(lastMapKey)) return;
++        lastMapKey = key.toString();
++        iconPending = false;
++        mapContent.removeAllViews();
++        int dungeon = info[9];
++        if (dungeon >= 0 && dungeon < 4) {
++            mapContent.addView(infoLine(DUNGEON_NAMES[dungeon], 18, GOLD, true));
++            mapContent.addView(iconRow(new int[] { 0x76, 0x75, 0x74 },
++                    new boolean[] { info[10] != 0, info[11] != 0, info[12] != 0 },
++                    new String[] { "Map", "Compass", "Boss Key" }));
++            mapContent.addView(infoLine("Small keys: " + info[13] + "      Stray fairies: " + info[14] + " / 15", 14,
++                    Color.rgb(243, 233, 210), false));
++            mapContent.addView(infoLine("The dungeon map shows on screen when you have it \u2014 move or resize it in Edit controls.",
++                    11, Color.argb(170, 255, 255, 255), false));
++        } else {
++            mapContent.addView(infoLine("Termina \u2014 owl statues", 18, GOLD, true));
++            LinearLayout cols = new LinearLayout(act);
++            LinearLayout c1 = new LinearLayout(act), c2 = new LinearLayout(act);
++            c1.setOrientation(LinearLayout.VERTICAL);
++            c2.setOrientation(LinearLayout.VERTICAL);
++            int owls = info[8];
++            for (int i = 0; i < OWL_NAMES.length; i++) {
++                boolean on = (owls & (1 << i)) != 0;
++                TextView t = infoLine((on ? "\u25C6 " : "\u25C7 ") + OWL_NAMES[i], 14,
++                        on ? Color.rgb(243, 233, 210) : Color.argb(110, 243, 233, 210), false);
++                (i < 5 ? c1 : c2).addView(t);
++            }
++            cols.addView(c1, new LinearLayout.LayoutParams(dp(200), ViewGroup.LayoutParams.WRAP_CONTENT));
++            cols.addView(c2, new LinearLayout.LayoutParams(dp(200), ViewGroup.LayoutParams.WRAP_CONTENT));
++            mapContent.addView(cols);
++            TextView go = pauseButton("\uD83D\uDDFA  Fast travel to an owl statue", v -> {
++                tapN64(N64_START); // close the pause menu, then open the owl map
++                handler.postDelayed(() -> act.nativeMmAction(ACT_MAP), 900);
++            });
++            mapContent.addView(go);
++        }
++        if (iconPending) lastMapKey = ""; // icons still loading: rebuild on the next update
++    }
++
++    private void rebuildQuestPage(int[] info) {
++        StringBuilder key = new StringBuilder();
++        for (int v : info) key.append(v).append(',');
++        if (key.toString().equals(lastQuestKey)) return;
++        lastQuestKey = key.toString();
++        iconPending = false;
++        questContent.removeAllViews();
++        int q = info[1];
++
++        questContent.addView(infoLine("Boss remains", 14, GOLD, true));
++        questContent.addView(iconRow(new int[] { 0x5D, 0x5E, 0x5F, 0x60 },
++                new boolean[] { (q & 1) != 0, (q & 2) != 0, (q & 4) != 0, (q & 8) != 0 },
++                new String[] { "Odolwa", "Goht", "Gyorg", "Twinmold" }));
++
++        int sword = info[3], shield = info[4], quiver = info[5], bombs = info[6];
++        questContent.addView(infoLine("Equipment", 14, GOLD, true));
++        questContent.addView(iconRow(
++                new int[] { sword > 0 ? 0x4D + sword - 1 : 0x4D, shield > 0 ? 0x51 + shield - 1 : 0x51,
++                        quiver > 0 ? 0x53 + quiver - 1 : 0x53, bombs > 0 ? 0x56 + bombs - 1 : 0x56, 0x6D },
++                new boolean[] { sword > 0, shield > 0, quiver > 0, bombs > 0, (q & (1 << 18)) != 0 },
++                new String[] { "Sword", "Shield", "Quiver", "Bomb Bag", "Notebook" }));
++
++        StringBuilder songs = new StringBuilder();
++        for (int bit = 6; bit <= 16; bit++) {
++            String name = SONG_NAMES[bit - 6];
++            if (!name.isEmpty() && (q & (1 << bit)) != 0) {
++                if (songs.length() > 0) songs.append("  \u00B7  ");
++                songs.append(name);
++            }
++        }
++        questContent.addView(infoLine("Songs", 14, GOLD, true));
++        TextView songLine = infoLine(songs.length() > 0 ? songs.toString() : "None yet", 13, Color.rgb(243, 233, 210), false);
++        songLine.setMaxWidth(dp(420));
++        questContent.addView(songLine);
++        questContent.addView(infoLine("Pieces of Heart: " + info[2] + " / 4", 13, Color.rgb(243, 233, 210), false));
++        if (iconPending) lastQuestKey = "";
++    }
++
 +    private void updatePausePanel() {
 +        boolean paused = (stateBits & ST_PAUSED) != 0;
 +        if (!paused || editing) {
 +            pausePanel.setVisibility(View.GONE);
++            currentPage = -1;
 +            return;
 +        }
++        int[] info = act.nativeMmGetPauseInfo();
++        if (info == null || info.length < 16 || info[0] < 0) {
++            pausePanel.setVisibility(View.GONE); // opening/closing animation, owl map, prompts
++            return;
++        }
++        int page = info[0];
++        currentPage = page;
++        pausePanel.setVisibility(View.VISIBLE);
++        for (int i = 0; i < 4; i++) tabs[i].setTextColor(i == page ? GOLD : Color.argb(150, 243, 233, 210));
++
++        gridContent.setVisibility((page == 0 || page == 3) ? View.VISIBLE : View.GONE);
++        mapContent.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
++        questContent.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
++        if (page == 1) {
++            rebuildMapPage(info);
++            return;
++        }
++        if (page == 2) {
++            rebuildQuestPage(info);
++            return;
++        }
++
 +        boolean grid = (stateBits & ST_PAUSE_GRID) != 0;
 +        int[] g = grid ? act.nativeMmGetPauseGrid() : null;
-+        if (g == null || g[0] < 0) grid = false;
-+        pausePanel.setVisibility(View.VISIBLE);
-+        pauseGridBox.setVisibility(grid ? View.VISIBLE : View.GONE);
-+        pauseHint.setVisibility(grid ? View.VISIBLE : View.GONE);
-+        if (!grid) {
-+            pauseTitle.setText("Pause");
-+            return;
-+        }
-+        pauseTitle.setText(g[0] == 3 ? "Masks" : "Items");
++        if (g == null || g.length < 26 || g[0] < 0) return; // keep showing the last grid while it settles
 +        for (int i = 0; i < 24; i++) {
 +            int item = g[2 + i];
 +            if (item != gridShown[i] || (item != 255 && !iconCache.containsKey(item))) {
@@ -1296,6 +1586,7 @@ index 0000000..6d07f39
 +    private void layoutAll() {
 +        int w = root.getWidth(), h = root.getHeight();
 +        if (w == 0 || h == 0) return;
++        if (hudBar != null && hudCtl != null) layoutHudBar();
 +
 +        FrameLayout.LayoutParams sz = (FrameLayout.LayoutParams) stickZone.getLayoutParams();
 +        sz.width = (int) (w * 0.45f);
@@ -1324,6 +1615,14 @@ index 0000000..6d07f39
 +            float ratio = c.kind == KIND_SKIP ? 0.30f
 +                    : (c.sub.isEmpty() ? (c.label.length() > 3 ? 0.22f : (c.style == STYLE_C ? 0.36f : 0.42f)) : 0.24f);
 +            c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
++            if (c.kind == KIND_HUD) {
++                continue; // laid out by layoutHudBar()
++            }
++            if (c.kind == KIND_MINIMAP) {
++                c.view.setVisibility(editing ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(c.hidden ? 0.3f : 1f);
++                continue;
++            }
 +            if (c.kind == KIND_STICK) {
 +                c.view.setVisibility(fixedStick && !menuMode ? View.VISIBLE : View.GONE);
 +                if (editing) c.view.setAlpha(1f);
@@ -1384,11 +1683,12 @@ index 0000000..6d07f39
 +            controlsHidden = false;
 +            releaseAll();
 +            for (Ctl c : ctls) {
-+                if (c.kind != KIND_STICK) c.view.setVisibility(View.VISIBLE);
++                if (c.kind != KIND_STICK && c.kind != KIND_HUD) c.view.setVisibility(View.VISIBLE);
 +            }
 +        } else {
 +            saveAll();
 +            for (Ctl c : ctls) c.view.setAlpha(1f);
++            pushMinimap();
 +        }
 +        layoutAll();
 +        touched();
@@ -1425,7 +1725,7 @@ index 0000000..6d07f39
 +    private boolean onCtlTouch(Ctl c, MotionEvent e) {
 +        touched();
 +        if (editing) return onCtlEdit(c, e);
-+        if (c.kind == KIND_STICK) return false; // let the stick area underneath handle it
++        if (c.kind == KIND_STICK || c.kind == KIND_MINIMAP) return false; // only meaningful in Edit controls
 +        if (controlsHidden && c.kind != KIND_TRAY) return false;
 +
 +        switch (e.getActionMasked()) {
@@ -1459,6 +1759,7 @@ index 0000000..6d07f39
 +                if (now - lastEditTap < 300) {
 +                    c.hidden = !c.hidden;
 +                    layoutAll();
++                    if (c.kind == KIND_MINIMAP) pushMinimap();
 +                }
 +                lastEditTap = now;
 +                c.dragDx = e.getRawX() - c.x * w;
@@ -1474,13 +1775,15 @@ index 0000000..6d07f39
 +            case MotionEvent.ACTION_MOVE:
 +                if (e.getPointerCount() >= 2 && c.pinchStartDist > 0) {
 +                    float scale = spacing(e) / c.pinchStartDist;
-+                    float min = c.kind == KIND_PANEL ? 220f : 36f, max = c.kind == KIND_PANEL ? 640f : 160f;
++                    float min = c.kind == KIND_PANEL ? 220f : (c.kind == KIND_HUD ? 24f : 36f);
++                    float max = c.kind == KIND_PANEL ? 640f : (c.kind == KIND_HUD ? 64f : (c.kind == KIND_MINIMAP ? 200f : 160f));
 +                    c.size = Math.max(min, Math.min(max, c.pinchStartSize * scale));
 +                } else if (e.getPointerCount() == 1) {
 +                    c.x = clamp((e.getRawX() - c.dragDx) / w);
 +                    c.y = clamp((e.getRawY() - c.dragDy) / h);
 +                }
 +                layoutAll();
++                if (c.kind == KIND_MINIMAP) pushMinimap(); // live preview while dragging
 +                return true;
 +            case MotionEvent.ACTION_POINTER_UP:
 +                c.pinchStartDist = 0;
@@ -2893,10 +3196,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..3d53bce
+index 0000000..c6bf3b2
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,888 @@
+@@ -0,0 +1,987 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -2909,6 +3212,7 @@ index 0000000..3d53bce
 +#include <ship/Context.h>
 +#include <fstream>
 +#include "fast/resource/type/Texture.h"
++#include "fast/resource/ResourceType.h"
 +#include <atomic>
 +#include <mutex>
 +#include <string>
@@ -2959,7 +3263,7 @@ index 0000000..3d53bce
 +static std::mutex sIconMutex;
 +static std::map<int, std::vector<int>> sIconCache; // item id -> { w, h, argb... }
 +static std::set<int> sIconRequests;
-+static std::atomic<int> sCItems[3] = { 0xFF, 0xFF, 0xFF };
++static std::atomic<int> sCItems[9] = { 0xFF, 0xFF, 0xFF, -1, -1, -1, 0, 0, 0 }; // items, ammo (-1 none), full
 +static std::atomic<int> sPausePage{ -1 };
 +static std::atomic<int> sPauseCursor{ -1 };
 +static std::atomic<int> sPauseSelect{ -1 };
@@ -2968,21 +3272,32 @@ index 0000000..3d53bce
 +extern "C" volatile s32 gMmTouchOverlayActive;
 +static std::atomic<int> sTouchOnlyPause{ 1 }; // hide the original pause graphics on the Items/Masks pages
 +static std::atomic<int> sModernHud{ -1 };     // requested HUD style (1 modern bar, 0 original), applied on game thread
-+static std::atomic<int> sHud[9];              // health, max, magic, maxMagic, rupees, maxRupees, day, time, flags
++static std::atomic<int> sHud[9];
++static std::atomic<int> sMinimapReq{ 0 };   // set when the overlay sends a new minimap placement
++static std::atomic<int> sMinimapVals[4];    // visible, x, y (game units from the left/top), scale x100              // health, max, magic, maxMagic, rupees, maxRupees, day, time, flags
 +
 +// Called from KaleidoScope_Draw: true = skip drawing the original pause pages (the touch panel replaces them)
 +extern "C" s32 MMMod_HidePauseGraphics(PlayState* play) {
 +    PauseContext* pauseCtx = &play->pauseCtx;
 +    if (!sTouchOnlyPause.load() || !gMmTouchOverlayActive) return false;
 +    if (IS_PAUSE_STATE_GAMEOVER(pauseCtx) || (pauseCtx->debugEditor != DEBUG_EDITOR_NONE)) return false;
-+    return (pauseCtx->pageIndex == PAUSE_ITEM) || (pauseCtx->pageIndex == PAUSE_MASK);
++    // Opening + main menu only: save prompts and anything else keep their original screens.
++    return (pauseCtx->state >= PAUSE_STATE_OPENING_0) && (pauseCtx->state <= PAUSE_STATE_MAIN) &&
++           (pauseCtx->mainState != PAUSE_MAIN_STATE_SONG_PLAYBACK) && !pauseCtx->itemDescriptionOn;
 +}
 +
 +static void LoadIcon(int item) {
 +    std::vector<int> out;
 +    if ((item >= 0) && (item < (int)(sizeof(gItemIcons) / sizeof(gItemIcons[0]))) && (gItemIcons[item] != nullptr)) {
-+        auto tex = ResourceLoad<Fast::Texture>((const char*)gItemIcons[item]);
-+        if (tex != nullptr && tex->ImageData != nullptr && tex->Type == Fast::TextureType::RGBA32bpp &&
++        // Check the resource really is a texture before using it as one.
++        auto res = ResourceLoad((const char*)gItemIcons[item]);
++        std::shared_ptr<Fast::Texture> tex = nullptr;
++        if ((res != nullptr) && (res->GetInitData() != nullptr) &&
++            (res->GetInitData()->Type == (uint32_t)Fast::ResourceType::Texture)) {
++            tex = std::static_pointer_cast<Fast::Texture>(res);
++        }
++        if (tex != nullptr && tex->ImageData != nullptr && tex->Width > 0 && tex->Height > 0 &&
++            tex->Width <= 128 && tex->Height <= 128 && tex->Type == Fast::TextureType::RGBA32bpp &&
 +            !(tex->Flags & TEX_FLAG_LOAD_AS_IMG) && (tex->ImageDataSize >= (uint32_t)tex->Width * tex->Height * 4)) {
 +            out.reserve(2 + tex->Width * tex->Height);
 +            out.push_back(tex->Width);
@@ -3006,12 +3321,66 @@ index 0000000..3d53bce
 +    for (int item : todo) LoadIcon(item);
 +}
 +
++// Ammo shown on a C button (like the game's own little numbers); -1 = item has no count
++static void AmmoFor(u8 item, s32* ammo, s32* full) {
++    *ammo = -1;
++    *full = 0;
++    s32 cap = 0;
++    switch (item) {
++        case ITEM_BOW: case ITEM_BOW_FIRE: case ITEM_BOW_ICE: case ITEM_BOW_LIGHT:
++            *ammo = AMMO(ITEM_BOW); cap = CUR_CAPACITY(UPG_QUIVER); break;
++        case ITEM_BOMB: *ammo = AMMO(ITEM_BOMB); cap = CUR_CAPACITY(UPG_BOMB_BAG); break;
++        case ITEM_BOMBCHU: *ammo = AMMO(ITEM_BOMBCHU); cap = CUR_CAPACITY(UPG_BOMB_BAG); break;
++        case ITEM_DEKU_STICK: *ammo = AMMO(ITEM_DEKU_STICK); cap = CUR_CAPACITY(UPG_DEKU_STICKS); break;
++        case ITEM_DEKU_NUT: *ammo = AMMO(ITEM_DEKU_NUT); cap = CUR_CAPACITY(UPG_DEKU_NUTS); break;
++        case ITEM_MAGIC_BEANS: *ammo = AMMO(ITEM_MAGIC_BEANS); cap = 20; break;
++        case ITEM_POWDER_KEG: *ammo = AMMO(ITEM_POWDER_KEG); cap = 1; break;
++        default: return;
++    }
++    *full = (cap > 0) && (*ammo >= cap);
++}
++
++// Quest page + map page data for the touch pause menu
++static std::atomic<int> sPauseAnyPage{ -1 };
++static std::atomic<int> sPauseInfo[24];
++
++static void UpdatePauseInfo(PlayState* play) {
++    u32 quest = gSaveContext.save.saveInfo.inventory.questItems;
++    sPauseInfo[0] = (int)(quest & 0x0FFFFFFF);                 // quest item bits (remains, songs, notebook...)
++    sPauseInfo[1] = (int)GET_QUEST_HEART_PIECE_COUNT;           // heart pieces 0-3
++    sPauseInfo[2] = GET_CUR_EQUIP_VALUE(EQUIP_TYPE_SWORD);      // 0 none, 1 kokiri, 2 razor, 3 gilded
++    sPauseInfo[3] = GET_CUR_EQUIP_VALUE(EQUIP_TYPE_SHIELD);     // 0 none, 1 hero, 2 mirror
++    sPauseInfo[4] = CUR_UPG_VALUE(UPG_QUIVER);
++    sPauseInfo[5] = CUR_UPG_VALUE(UPG_BOMB_BAG);
++    sPauseInfo[6] = CUR_UPG_VALUE(UPG_WALLET);
++    sPauseInfo[7] = gSaveContext.save.saveInfo.playerData.owlActivationFlags;
++    bool inDungeon = Map_CurRoomHasMapI(play) && (gSaveContext.dungeonSceneSharedIndex < 4);
++    s32 d = inDungeon ? gSaveContext.dungeonSceneSharedIndex : -1;
++    sPauseInfo[8] = d;
++    if (d >= 0) {
++        sPauseInfo[9] = CHECK_DUNGEON_ITEM(DUNGEON_MAP, d) ? 1 : 0;
++        sPauseInfo[10] = CHECK_DUNGEON_ITEM(DUNGEON_COMPASS, d) ? 1 : 0;
++        sPauseInfo[11] = CHECK_DUNGEON_ITEM(DUNGEON_BOSS_KEY, d) ? 1 : 0;
++        sPauseInfo[12] = DUNGEON_KEY_COUNT(d) > 0 ? DUNGEON_KEY_COUNT(d) : 0;
++        sPauseInfo[13] = gSaveContext.save.saveInfo.inventory.strayFairies[d];
++    }
++    sPauseInfo[14] = gSaveContext.save.saveInfo.playerData.isDoubleMagicAcquired;
++}
++
 +static void UpdateItemsAndPause(PlayState* play) {
-+    sCItems[0] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_LEFT);
-+    sCItems[1] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_DOWN);
-+    sCItems[2] = GET_CUR_FORM_BTN_ITEM(EQUIP_SLOT_C_RIGHT);
++    static const s32 slots[3] = { EQUIP_SLOT_C_LEFT, EQUIP_SLOT_C_DOWN, EQUIP_SLOT_C_RIGHT };
++    for (s32 i = 0; i < 3; i++) {
++        u8 item = GET_CUR_FORM_BTN_ITEM(slots[i]);
++        s32 ammo, full;
++        AmmoFor(item, &ammo, &full);
++        sCItems[i] = item;
++        sCItems[3 + i] = ammo;
++        sCItems[6 + i] = full;
++    }
 +
 +    PauseContext* pauseCtx = &play->pauseCtx;
++    sPauseAnyPage = (IS_PAUSED(pauseCtx) && (pauseCtx->state == PAUSE_STATE_MAIN)) ? pauseCtx->pageIndex : -1;
++    UpdatePauseInfo(play);
 +    bool gridReady = IS_PAUSED(pauseCtx) && (pauseCtx->state == PAUSE_STATE_MAIN) &&
 +                     (pauseCtx->mainState == PAUSE_MAIN_STATE_IDLE) && !pauseCtx->itemDescriptionOn &&
 +                     ((pauseCtx->pageIndex == PAUSE_ITEM) || (pauseCtx->pageIndex == PAUSE_MASK));
@@ -3375,6 +3744,7 @@ index 0000000..3d53bce
 +extern "C" void MMMod_OnPlayInit(void) {
 +    if (!sPendingLoad || !sHaveSnap) return;
 +    sPendingLoad = false;
++    gSaveContext.fileNum = sSnap->fileNum; // the quick save may belong to a different file slot
 +    memcpy(&gSaveContext.save, &sSnap->save, sizeof(Save));
 +    memcpy(gSaveContext.eventInf, sSnap->eventInf, sizeof(sSnap->eventInf));
 +    memcpy(gSaveContext.cycleSceneFlags, sSnap->cycleSceneFlags, sizeof(sSnap->cycleSceneFlags));
@@ -3530,6 +3900,16 @@ index 0000000..3d53bce
 +    CVarSave();
 +}
 +
++static void ApplyMinimap() {
++    if (!sMinimapReq.exchange(0)) return;
++    bool visible = sMinimapVals[0].load() != 0;
++    // mode: 1 = hidden, 3 = movable (measured from the left edge of the screen)
++    CVarSetInteger("gHudEditor.Minimap.Mode", visible ? 3 : 1);
++    CVarSetInteger("gHudEditor.Minimap.Position.X", sMinimapVals[1].load());
++    CVarSetInteger("gHudEditor.Minimap.Position.Y", sMinimapVals[2].load());
++    CVarSetFloat("gHudEditor.Minimap.Scale", sMinimapVals[3].load() / 100.0f);
++}
++
 +static void UpdateHudData(PlayState* play) {
 +    sHud[0] = gSaveContext.save.saveInfo.playerData.health;
 +    sHud[1] = gSaveContext.save.saveInfo.playerData.healthCapacity;
@@ -3545,6 +3925,7 @@ index 0000000..3d53bce
 +extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
 +    int bits = 0;
 +    ApplyHudStyle();
++    ApplyMinimap();
 +    UpdateHudData(play);
 +    ServiceIcons();
 +    UpdateItemsAndPause(play);
@@ -3730,11 +4111,32 @@ index 0000000..3d53bce
 +}
 +
 +// { C-left, C-down, C-right } item ids (255 = empty)
++// { 3 item ids (255 = empty), 3 ammo counts (-1 = none), 3 "full" flags }
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetCItems(JNIEnv* env, jobject) {
-+    jint vals[3] = { sCItems[0].load(), sCItems[1].load(), sCItems[2].load() };
-+    jintArray arr = env->NewIntArray(3);
-+    env->SetIntArrayRegion(arr, 0, 3, vals);
++    jint vals[9];
++    for (int i = 0; i < 9; i++) vals[i] = sCItems[i].load();
++    jintArray arr = env->NewIntArray(9);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 9, vals);
 +    return arr;
++}
++
++// { current pause page (-1 = not paused / not ready), then quest + map info (see UpdatePauseInfo) }
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetPauseInfo(JNIEnv* env, jobject) {
++    jint vals[16];
++    vals[0] = sPauseAnyPage.load();
++    for (int i = 0; i < 15; i++) vals[1 + i] = sPauseInfo[i].load();
++    jintArray arr = env->NewIntArray(16);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 16, vals);
++    return arr;
++}
++
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmSetMinimap(JNIEnv*, jobject, jint visible,
++                                                                                         jint x, jint y, jint scale) {
++    sMinimapVals[0] = visible;
++    sMinimapVals[1] = x;
++    sMinimapVals[2] = y;
++    sMinimapVals[3] = scale;
++    sMinimapReq = 1;
 +}
 +
 +// { width, height, ARGB pixels... }, empty array if the item has no icon, or null if not loaded yet (try again)
@@ -3747,7 +4149,7 @@ index 0000000..3d53bce
 +        return nullptr;
 +    }
 +    jintArray arr = env->NewIntArray((jsize)it->second.size());
-+    if (!it->second.empty()) env->SetIntArrayRegion(arr, 0, (jsize)it->second.size(), it->second.data());
++    if (arr != nullptr && !it->second.empty()) env->SetIntArrayRegion(arr, 0, (jsize)it->second.size(), it->second.data());
 +    return arr;
 +}
 +
@@ -3761,7 +4163,7 @@ index 0000000..3d53bce
 +        for (int i = 0; i < ITEM_NUM_SLOTS; i++) vals[2 + i] = sPauseItems[i];
 +    }
 +    jintArray arr = env->NewIntArray(2 + ITEM_NUM_SLOTS);
-+    env->SetIntArrayRegion(arr, 0, 2 + ITEM_NUM_SLOTS, vals);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 2 + ITEM_NUM_SLOTS, vals);
 +    return arr;
 +}
 +
@@ -3781,7 +4183,7 @@ index 0000000..3d53bce
 +    jint vals[9];
 +    for (int i = 0; i < 9; i++) vals[i] = sHud[i].load();
 +    jintArray arr = env->NewIntArray(9);
-+    env->SetIntArrayRegion(arr, 0, 9, vals);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 9, vals);
 +    return arr;
 +}
 +#endif
