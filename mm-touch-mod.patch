@@ -391,7 +391,7 @@ index 0000000..e2b18e6
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..83e65b2 100644
+index fe546c8..f3eba42 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,15 @@ public class MainActivity extends SDLActivity{
@@ -410,7 +410,7 @@ index fe546c8..83e65b2 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +964,29 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +964,31 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -435,12 +435,14 @@ index fe546c8..83e65b2 100644
 +    public native int[] nativeMmGetAction();
 +    public native int[] nativeMmGetInventory();
 +    public native void nativeMmEquipC(int cSlot, int invSlot);
++    public native int[] nativeMmGetMapInfo();
++    public native byte[] nativeMmGetMapGrid();
 +    public native void nativeMmSetMinimap(int visible, int x, int y, int scale);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +994,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +996,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -564,12 +566,199 @@ index 0000000..6c3817a
 +        c.drawText(dist, tx, ty, text);
 +    }
 +}
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java b/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java
+new file mode 100644
+index 0000000..08a5f20
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java
+@@ -0,0 +1,181 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.LinearGradient;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.Rect;
++import android.graphics.RectF;
++import android.graphics.Shader;
++import android.graphics.Typeface;
++import android.util.TypedValue;
++import android.view.View;
++
++/**
++ * Clean, readable mini-map: walkable floors in soft teal with bright edges, centred on Link (gold arrow),
++ * with chests (gold = unopened, grey = opened), stray fairies (pink) and the current objective (diamond).
++ */
++public class MiniMapView extends View {
++    private final Paint bg = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mapPaint = new Paint(); // no filtering: crisp cells
++    private final Paint mark = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint markEdge = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Path p = new Path();
++    private final RectF rf = new RectF();
++    private final Rect src = new Rect();
++
++    private Bitmap map;
++    private int version = -1;
++    private int[] info = new int[0];
++    private float viewUnits = 1700f; // world units shown across the map
++
++    public MiniMapView(Context c) {
++        super(c);
++        rim.setStyle(Paint.Style.STROKE);
++        markEdge.setStyle(Paint.Style.STROKE);
++        markEdge.setColor(Color.argb(220, 20, 16, 8));
++        text.setColor(Ornate.CREAM);
++        text.setTextAlign(Paint.Align.CENTER);
++        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++    }
++
++    private float dp(float v) {
++        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++    }
++
++    /** info from nativeMmGetMapInfo; grid fetched only when the version changes. */
++    public void update(int[] newInfo, GridSource gridSource) {
++        if (newInfo == null || newInfo.length < 12) return;
++        if (newInfo[0] != version) {
++            byte[] grid = gridSource.grid();
++            int w = newInfo[4], h = newInfo[5];
++            if (grid != null && w > 0 && h > 0 && grid.length >= w * h) {
++                map = buildBitmap(grid, w, h);
++                version = newInfo[0];
++            }
++        }
++        info = newInfo;
++        invalidate();
++    }
++
++    interface GridSource {
++        byte[] grid();
++    }
++
++    private static Bitmap buildBitmap(byte[] g, int w, int h) {
++        int[] px = new int[w * h];
++        int fill = Color.argb(150, 70, 150, 130);
++        int edge = Color.argb(235, 200, 240, 225);
++        for (int z = 0; z < h; z++) {
++            for (int x = 0; x < w; x++) {
++                if (g[z * w + x] == 0) continue;
++                boolean border = x == 0 || z == 0 || x == w - 1 || z == h - 1 || g[z * w + x - 1] == 0
++                        || g[z * w + x + 1] == 0 || g[(z - 1) * w + x] == 0 || g[(z + 1) * w + x] == 0;
++                px[z * w + x] = border ? edge : fill;
++            }
++        }
++        return Bitmap.createBitmap(px, 0, w, w, h, Bitmap.Config.ARGB_8888);
++    }
++
++    @Override
++    protected void onDraw(Canvas c) {
++        float w = getWidth(), h = getHeight();
++        float r = dp(14);
++        rf.set(dp(2), dp(2), w - dp(2), h - dp(2));
++        bg.setShader(new LinearGradient(0, 0, 0, h, Color.argb(205, 22, 44, 36), Color.argb(215, 8, 16, 14), Shader.TileMode.CLAMP));
++        c.drawRoundRect(rf, r, r, bg);
++
++        if (info.length >= 12 && map != null) {
++            boolean hasMap = info[6] != 0;
++            int minX = info[1], minZ = info[2], cell = Math.max(1, info[3]);
++            int lx = info[8], lz = info[9];
++            float scale = (w - dp(8)) / viewUnits;            // view px per world unit
++            float cx = w / 2f, cy = h / 2f;
++
++            c.save();
++            p.reset();
++            p.addRoundRect(rf, r, r, Path.Direction.CW);
++            c.clipPath(p);
++            if (hasMap) {
++                // the part of the grid around Link
++                float half = viewUnits / 2f / cell * Math.max(1f, h / w);
++                float gcx = (lx - minX) / (float) cell, gcz = (lz - minZ) / (float) cell;
++                float halfW = viewUnits / 2f / cell, halfH = halfW * h / w;
++                src.set((int) Math.floor(gcx - halfW), (int) Math.floor(gcz - halfH), (int) Math.ceil(gcx + halfW),
++                        (int) Math.ceil(gcz + halfH));
++                rf.set(cx + (src.left - gcx) * cell * scale, cy + (src.top - gcz) * cell * scale,
++                        cx + (src.right - gcx) * cell * scale, cy + (src.bottom - gcz) * cell * scale);
++                c.drawBitmap(map, src, rf, mapPaint);
++            } else {
++                text.setTextSize(dp(11));
++                c.drawText("Find the map", cx, cy - dp(16), text);
++            }
++
++            // markers
++            int n = info[11];
++            for (int i = 0; i < n && 12 + i * 3 + 2 < info.length; i++) {
++                int type = info[12 + i * 3];
++                float mx = cx + (info[13 + i * 3] - lx) * scale, my = cy + (info[14 + i * 3] - lz) * scale;
++                drawMarker(c, type, Math.max(dp(8), Math.min(w - dp(8), mx)), Math.max(dp(8), Math.min(h - dp(8), my)));
++            }
++
++            // Link: gold arrow pointing the way he faces
++            float yaw = info[10] * 360f / 65536f;
++            c.save();
++            c.rotate(-yaw + 180f, cx, cy);
++            float s = dp(7);
++            p.reset();
++            p.moveTo(cx, cy - s * 1.3f);
++            p.lineTo(cx + s, cy + s);
++            p.lineTo(cx, cy + s * 0.45f);
++            p.lineTo(cx - s, cy + s);
++            p.close();
++            mark.setColor(Ornate.GOLD_LIGHT);
++            c.drawPath(p, mark);
++            markEdge.setStrokeWidth(dp(1.2f));
++            c.drawPath(p, markEdge);
++            c.restore();
++            c.restore();
++        }
++
++        rim.setStrokeWidth(dp(2));
++        rim.setColor(Ornate.GOLD_MID);
++        rf.set(dp(2), dp(2), w - dp(2), h - dp(2));
++        c.drawRoundRect(rf, r, r, rim);
++    }
++
++    private void drawMarker(Canvas c, int type, float x, float y) {
++        float s = dp(5);
++        markEdge.setStrokeWidth(dp(1));
++        switch (type) {
++            case 1: // chest, not opened yet
++            case 2: // opened chest
++                mark.setColor(type == 1 ? Ornate.GOLD_LIGHT : Color.argb(170, 150, 150, 140));
++                rf.set(x - s, y - s * 0.75f, x + s, y + s * 0.75f);
++                c.drawRoundRect(rf, dp(1.5f), dp(1.5f), mark);
++                c.drawRoundRect(rf, dp(1.5f), dp(1.5f), markEdge);
++                break;
++            case 3: // stray fairy
++                mark.setColor(Color.rgb(255, 150, 210));
++                c.drawCircle(x, y, s * 0.8f, mark);
++                c.drawCircle(x, y, s * 0.8f, markEdge);
++                break;
++            case 4: // objective
++                mark.setColor(Ornate.GOLD_LIGHT);
++                p.reset();
++                p.moveTo(x, y - s * 1.3f);
++                p.lineTo(x + s, y);
++                p.lineTo(x, y + s * 1.3f);
++                p.lineTo(x - s, y);
++                p.close();
++                c.drawPath(p, mark);
++                c.drawPath(p, markEdge);
++                break;
++        }
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..5633415
+index 0000000..7b9b428
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2260 @@
+@@ -0,0 +1,2391 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -616,7 +805,7 @@ index 0000000..5633415
 +            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
-+            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9;
++            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -634,6 +823,7 @@ index 0000000..5633415
 +    private FrameLayout root;
 +    private View stickZone, camZone, stickBase, stickKnob;
 +    private LinearLayout tray, editBar, songsPanel, songsList;
++    private android.widget.ScrollView settingsScroll;
 +    private TextView opacityLabel, toast, trailItem, questItem;
 +    private final List<Ctl> ctls = new ArrayList<>();
 +    private Ctl questCtl, skipCtl, sprintCtl;
@@ -733,6 +923,10 @@ index 0000000..5633415
 +    private HudBarView hudBar;
 +    private Ctl hudCtl, infoCtl, minimapCtl, poundCtl, aCtl;
 +    private WheelView wheel;
++    private MiniMapView miniMap;
++    private Ctl mapCtl;
++    private boolean ourMap;
++    private TextView ourMapLabel;
 +    private MarkerView marker;
 +    private int form = 0;           // PLAYER_FORM_*: 0 Fierce Deity, 1 Goron, 2 Zora, 3 Deku, 4 human
 +    private boolean autoRun, markerOn, fpInverted;
@@ -817,6 +1011,7 @@ index 0000000..5633415
 +        autoRun = prefs.getBoolean("autoRun", true);
 +        markerOn = prefs.getBoolean("marker", true);
 +        fpInverted = prefs.getBoolean("fpInverted", false);
++        ourMap = prefs.getBoolean("ourMap", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -835,8 +1030,10 @@ index 0000000..5633415
 +        ctls.add(new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50));
 +        ctls.add(new Ctl("qsave", "Save", "", KIND_ACTION, ACT_QUICKSAVE, STYLE_PLAIN, 0.620f, 0.300f, 50));
 +        ctls.add(new Ctl("wheel", "+", "", KIND_WHEEL, 0, STYLE_C, 0.700f, 0.200f, 54));
-+        poundCtl = new Ctl("pound", "Pound", "", KIND_POUND, 0, STYLE_PLAIN, 0.880f, 0.470f, 60);
++        poundCtl = new Ctl("pound", "Special", "", KIND_POUND, 0, STYLE_PLAIN, 0.880f, 0.470f, 60);
 +        ctls.add(poundCtl);
++        mapCtl = new Ctl("ourmap", "", "", KIND_MAPVIEW, 0, STYLE_PLAIN, 0.100f, 0.640f, 120);
++        ctls.add(mapCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
 +        // Where the stick sits in Fixed mode (only shown in Fixed mode; move/resize it in Edit controls)
 +        fixedStickCtl = new Ctl("fixedstick", "", "", KIND_STICK, 0, STYLE_PLAIN, 0.150f, 0.700f, 120);
@@ -887,6 +1084,7 @@ index 0000000..5633415
 +            loadCtl(c);
 +            if (c.kind == KIND_PANEL) buildQuestPanel(c);
 +            else if (c.kind == KIND_HUD) attachHudCtl(c);
++            else if (c.kind == KIND_MAPVIEW) attachMapCtl(c);
 +            else buildCtl(c);
 +        }
 +        marker = new MarkerView(act);
@@ -914,6 +1112,7 @@ index 0000000..5633415
 +        act.nativeMmSetOption(2, modernHud ? 1 : 0);
 +        act.nativeMmSetOption(3, instantDoors ? 1 : 0);
 +        act.nativeMmSetOption(4, fpInverted ? 1 : 0);
++        act.nativeMmSetOption(5, ourMap ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -940,7 +1139,7 @@ index 0000000..5633415
 +            float target = controlsHidden ? 0f : (idle ? opacity * 0.3f : opacity);
 +            for (Ctl c : ctls) {
 +                if (c.view == null || c.kind == KIND_PANEL || c.kind == KIND_SKIP || c.kind == KIND_HUD
-+                        || c.kind == KIND_MINIMAP || (editing && c.hidden)) continue;
++                        || c.kind == KIND_MINIMAP || c.kind == KIND_MAPVIEW || (editing && c.hidden)) continue;
 +                float t = (c.kind == KIND_TRAY) ? Math.max(target, 0.35f) : target; // keep "..." findable
 +                if (Math.abs(c.view.getAlpha() - t) > 0.01f) c.view.animate().alpha(t).setDuration(250).start();
 +            }
@@ -1020,6 +1219,7 @@ index 0000000..5633415
 +            updateCIcons();
 +            updateActionAndForm();
 +            updateMarker();
++            updateMiniMap();
 +            updatePausePanel();
 +            updateHudBar();
 +
@@ -1063,11 +1263,12 @@ index 0000000..5633415
 +            songsPanel.setVisibility(View.GONE);
 +            notePad.setVisibility(View.GONE);
 +            marker.setVisibility(View.GONE);
++            miniMap.setVisibility(View.GONE);
 +            if (wheel.getVisibility() == View.VISIBLE) closeWheel();
 +            pauseWrap.setVisibility(View.GONE);
 +            hudBar.setVisibility(View.GONE);
 +            infoBar.setVisibility(View.GONE);
-+            settingsPanel.setVisibility(View.GONE);
++            settingsScroll.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
 +            closeMenuBtn.setVisibility(View.VISIBLE);
 +        } else {
@@ -1151,11 +1352,22 @@ index 0000000..5633415
 +        return t;
 +    }
 +
++    // Every panel shares one look: deep green glass fading to near-black, rounded, with a gold rim.
 +    private GradientDrawable panelDrawable() {
-+        GradientDrawable bg = new GradientDrawable();
-+        bg.setColor(PANEL_BG);
-+        bg.setCornerRadius(dp(12));
-+        bg.setStroke(dp(2), GOLD_SOFT);
++        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
++                new int[] { Color.argb(232, 24, 46, 38), Color.argb(238, 8, 16, 14) });
++        bg.setCornerRadius(dp(14));
++        bg.setStroke(dp(2), Ornate.GOLD_MID);
++        return bg;
++    }
++
++    // Buttons inside menus: small green pills with a thin gold edge
++    private GradientDrawable pillDrawable(boolean on) {
++        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
++                on ? new int[] { Color.rgb(176, 132, 52), Color.rgb(110, 76, 24) }
++                   : new int[] { Color.argb(220, 52, 98, 78), Color.argb(220, 20, 48, 38) });
++        bg.setCornerRadius(dp(18));
++        bg.setStroke(dp(1.5f), on ? Ornate.GOLD_LIGHT : Color.argb(200, 198, 160, 82));
 +        return bg;
 +    }
 +
@@ -1286,6 +1498,21 @@ index 0000000..5633415
 +        root.addView(songsPanel, lp);
 +    }
 +
++    // ---------------------------------------------------------------- our mini-map
++    private void attachMapCtl(Ctl c) {
++        miniMap = new MiniMapView(act);
++        c.view = miniMap;
++        miniMap.setOnTouchListener((view, e) -> editing ? onCtlEdit(c, e) : false);
++        miniMap.setVisibility(View.GONE);
++        root.addView(miniMap, new FrameLayout.LayoutParams(dp(c.size), dp(c.size)));
++    }
++
++    private void updateMiniMap() {
++        boolean show = ourMap && !mapCtl.hidden && !controlsHidden && (editing || (stateBits & ST_GAMEPLAY) != 0);
++        miniMap.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (show && !editing) miniMap.update(act.nativeMmGetMapInfo(), () -> act.nativeMmGetMapGrid());
++    }
++
 +    // ---------------------------------------------------------------- item / mask wheel
 +    private void buildWheel() {
 +        wheel = new WheelView(act, new WheelView.Host() {
@@ -1317,23 +1544,66 @@ index 0000000..5633415
 +        wheel.setVisibility(View.GONE);
 +    }
 +
-+    // ---------------------------------------------------------------- Goron pound: one touch holds A, then adds B
-+    private final Runnable poundB = new Runnable() {
++    // ---------------------------------------------------------------- mask special button
++    // One button for each form's two-button move:
++    //   Goron        press = curl (A), keep holding ~0.4s = ground pound (adds B)
++    //   Zora         hold = electric barrier (R)
++    //   Deku         hold = charge a bubble (B), let go to shoot it
++    //   Fierce Deity tap = sword beam (Z-target + B)
++    private int specialHeld = 0;
++    private final Runnable specialSecond = new Runnable() {
 +        @Override
 +        public void run() {
++            if (specialHeld == 0) return;
 +            ModTouchOverlay.this.act.nativeMmSetN64Button(N64_B, true);
++            specialHeld |= N64_B;
 +        }
 +    };
 +
 +    private void startPound() {
-+        act.nativeMmSetN64Button(N64_A, true);
-+        handler.postDelayed(poundB, 120);
++        releaseSpecial();
++        switch (form) {
++            case 1: // Goron: curl, then pound if still held
++                press(N64_A);
++                handler.postDelayed(specialSecond, 400);
++                break;
++            case 2: // Zora barrier
++                press(N64_R);
++                break;
++            case 3: // Deku bubble
++                press(N64_B);
++                break;
++            case 0: // Fierce Deity beam: target, then swing
++                press(N64_Z);
++                handler.postDelayed(specialSecond, 90);
++                break;
++        }
++    }
++
++    private void press(int mask) {
++        act.nativeMmSetN64Button(mask, true);
++        specialHeld |= mask;
 +    }
 +
 +    private void stopPound() {
-+        handler.removeCallbacks(poundB);
-+        act.nativeMmSetN64Button(N64_B, false);
-+        act.nativeMmSetN64Button(N64_A, false);
++        releaseSpecial();
++    }
++
++    private void releaseSpecial() {
++        handler.removeCallbacks(specialSecond);
++        for (int m : new int[] { N64_A, N64_B, N64_R, N64_Z }) {
++            if ((specialHeld & m) != 0) act.nativeMmSetN64Button(m, false);
++        }
++        specialHeld = 0;
++    }
++
++    private static int specialIcon(int form) {
++        switch (form) {
++            case 1: return Ornate.ICON_POUND;
++            case 2: return Ornate.ICON_BOLT;
++            case 3: return Ornate.ICON_BUBBLE;
++            default: return Ornate.ICON_BEAM;
++        }
 +    }
 +
 +    // ---------------------------------------------------------------- A button shows what it will do
@@ -1354,15 +1624,19 @@ index 0000000..5633415
 +    }
 +
 +    private int lastAction = -99;
++    private float lastAsize = -1;
 +
 +    private void updateActionAndForm() {
 +        int[] a = act.nativeMmGetAction();
 +        if (a == null || a.length < 2) return;
 +        if (a[1] != form) {
 +            form = a[1];
-+            layoutAll(); // Goron pound button appears/disappears
++            releaseSpecial();
++            if (poundCtl.iconView instanceof Ornate.IconView) ((Ornate.IconView) poundCtl.iconView).setIcon(specialIcon(form));
++            layoutAll(); // mask special button appears/disappears
 +        }
-+        if (aCtl == null || aCtl.iconView == null || a[0] == lastAction) return;
++        if (aCtl == null || aCtl.iconView == null || (a[0] == lastAction && lastAsize == aCtl.size)) return;
++        lastAsize = aCtl.size;
 +        lastAction = a[0];
 +        String label = actionLabel(a[0]);
 +        if (label == null) {
@@ -1370,7 +1644,8 @@ index 0000000..5633415
 +            aCtl.iconView.setVisibility(View.VISIBLE);
 +        } else {
 +            aCtl.text.setText(label);
-+            aCtl.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(aCtl.size) * (label.length() > 5 ? 0.17f : 0.21f));
++            float k = label.length() <= 4 ? 0.15f : (label.length() <= 6 ? 0.125f : 0.105f);
++            aCtl.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(aCtl.size) * k);
 +            aCtl.text.setVisibility(View.VISIBLE);
 +            aCtl.iconView.setVisibility(View.GONE);
 +        }
@@ -1448,9 +1723,9 @@ index 0000000..5633415
 +            final int idx = Integer.parseInt(line.substring(0, colon));
 +            TextView row = new TextView(act);
 +            row.setText(line.substring(colon + 1));
-+            row.setTextColor(Color.WHITE);
++            row.setTextColor(Ornate.CREAM);
 +            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-+            row.setTypeface(Typeface.DEFAULT_BOLD);
++            row.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +            row.setPadding(dp(8), dp(7), dp(8), dp(7));
 +            row.setOnClickListener(v -> {
 +                touched();
@@ -1629,11 +1904,7 @@ index 0000000..5633415
 +            for (int col = 0; col < 6; col++) {
 +                final int slot = r * 6 + col;
 +                FrameLayout tile = new FrameLayout(act);
-+                GradientDrawable bg = new GradientDrawable();
-+                bg.setColor(Color.argb(120, 40, 36, 60));
-+                bg.setCornerRadius(dp(8));
-+                bg.setStroke(dp(1), Color.argb(70, 232, 196, 92));
-+                tile.setBackground(bg);
++                tile.setBackground(tileDrawable(false));
 +                ImageView iv = new ImageView(act);
 +                iv.setScaleType(ImageView.ScaleType.FIT_CENTER);
 +                FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -1644,7 +1915,7 @@ index 0000000..5633415
 +                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
 +                    act.nativeMmPauseSelect(slot);
 +                });
-+                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(52), dp(52));
++                LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(pauseTile()), dp(pauseTile()));
 +                tlp.setMargins(dp(3), dp(3), dp(3), dp(3));
 +                row.addView(tile, tlp);
 +                gridTiles[slot] = tile;
@@ -1709,6 +1980,13 @@ index 0000000..5633415
 +        lp.setMargins(dp(12), 0, dp(12), 0);
 +        a.setLayoutParams(lp);
 +        return a;
++    }
++
++    // Tile size so the whole pause menu fits on screen (landscape height minus header, name and hint)
++    private float pauseTile() {
++        android.util.DisplayMetrics m = act.getResources().getDisplayMetrics();
++        float hDp = Math.min(m.widthPixels, m.heightPixels) / m.density;
++        return Math.max(34f, Math.min(52f, (hDp - 190f) / 4f - 6f));
 +    }
 +
 +    private TextView pauseButton(String label, View.OnClickListener onClick) {
@@ -1910,12 +2188,7 @@ index 0000000..5633415
 +        int cursorItem = (g[1] >= 0 && g[1] < 24) ? g[2 + g[1]] : 255;
 +        pauseItemName.setText(cursorItem == 255 ? "" : itemName(cursorItem));
 +        if (g[1] != gridCursorShown) {
-+            for (int i = 0; i < 24; i++) {
-+                GradientDrawable bg = (GradientDrawable) gridTiles[i].getBackground();
-+                boolean sel = i == g[1];
-+                bg.setStroke(dp(sel ? 3 : 1), sel ? GOLD : Color.argb(70, 232, 196, 92));
-+                bg.setColor(sel ? Color.argb(160, 120, 96, 30) : Color.argb(120, 40, 36, 60));
-+            }
++            for (int i = 0; i < 24; i++) gridTiles[i].setBackground(tileDrawable(i == g[1]));
 +            gridCursorShown = g[1];
 +        }
 +    }
@@ -1992,6 +2265,12 @@ index 0000000..5633415
 +            prefs.edit().putBoolean("autoRun", autoRun).apply();
 +            refreshSettings();
 +        });
++        ourMapLabel = settingsRow(settingsPanel, "Mini-map", null, null, "Change", () -> {
++            ourMap = !ourMap;
++            prefs.edit().putBoolean("ourMap", ourMap).apply();
++            act.nativeMmSetOption(5, ourMap ? 1 : 0);
++            refreshSettings();
++        });
 +        markerLabel = settingsRow(settingsPanel, "Objective marker", null, null, "Change", () -> {
 +            markerOn = !markerOn;
 +            prefs.edit().putBoolean("marker", markerOn).apply();
@@ -2021,14 +2300,22 @@ index 0000000..5633415
 +        settingsPanel.addView(bottom);
 +        settingsPanel.setVisibility(View.GONE);
 +
-+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        settingsPanel.setVisibility(View.VISIBLE);
++        settingsScroll = new android.widget.ScrollView(act);
++        settingsScroll.setVerticalScrollBarEnabled(true);
++        settingsScroll.addView(settingsPanel);
++        settingsScroll.setVisibility(View.GONE);
++        android.util.DisplayMetrics m = act.getResources().getDisplayMetrics();
++        int maxH = (int) (Math.min(m.widthPixels, m.heightPixels) * 0.9f);
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, maxH);
 +        lp.gravity = Gravity.CENTER;
-+        root.addView(settingsPanel, lp);
++        root.addView(settingsScroll, lp);
 +        refreshSettings();
 +    }
 +
 +    private void showSettings(boolean show) {
-+        settingsPanel.setVisibility(show ? View.VISIBLE : View.GONE);
++        settingsScroll.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (show) settingsScroll.bringToFront();
 +        if (show) {
 +            releaseAll();
 +            refreshSettings();
@@ -2068,6 +2355,7 @@ index 0000000..5633415
 +        doorsLabel.setText(instantDoors ? "Instant" : "Fade");
 +        autoRunLabel.setText(autoRun ? "On" : "Off");
 +        markerLabel.setText(markerOn ? "On" : "Off");
++        ourMapLabel.setText(ourMap ? "Clean map" : "Game's map");
 +        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
@@ -2117,16 +2405,12 @@ index 0000000..5633415
 +    private TextView trayTile(String icon, String label, View.OnClickListener onClick, boolean closesTray) {
 +        TextView b = new TextView(act);
 +        b.setText(icon + "\n" + label);
-+        b.setTextColor(Color.WHITE);
++        b.setTextColor(Ornate.CREAM);
 +        b.setGravity(Gravity.CENTER);
-+        b.setTypeface(Typeface.DEFAULT_BOLD);
++        b.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 +        b.setLineSpacing(dp(2), 1f);
-+        GradientDrawable bg = new GradientDrawable();
-+        bg.setColor(Color.argb(110, 40, 36, 60));
-+        bg.setCornerRadius(dp(10));
-+        bg.setStroke(dp(1), Color.argb(60, 232, 196, 92));
-+        b.setBackground(bg);
++        b.setBackground(tileDrawable(false));
 +        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(66), dp(62));
 +        lp.setMargins(dp(4), dp(4), dp(4), dp(4));
 +        b.setLayoutParams(lp);
@@ -2139,11 +2423,18 @@ index 0000000..5633415
 +        return b;
 +    }
 +
++    private GradientDrawable tileDrawable(boolean on) {
++        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
++                on ? new int[] { Color.rgb(176, 132, 52), Color.rgb(110, 76, 24) }
++                   : new int[] { Color.argb(200, 40, 76, 62), Color.argb(210, 14, 34, 28) });
++        bg.setCornerRadius(dp(12));
++        bg.setStroke(dp(on ? 2 : 1.2f), on ? Ornate.GOLD_LIGHT : Color.argb(170, 198, 160, 82));
++        return bg;
++    }
++
 +    private void setTileOn(TextView tile, boolean on) {
 +        if (tile == null) return;
-+        GradientDrawable bg = (GradientDrawable) tile.getBackground();
-+        bg.setColor(on ? Color.argb(170, 150, 118, 40) : Color.argb(110, 40, 36, 60));
-+        bg.setStroke(dp(on ? 2 : 1), on ? GOLD : Color.argb(60, 232, 196, 92));
++        tile.setBackground(tileDrawable(on));
 +    }
 +
 +    private TextView trayItem(String label, View.OnClickListener onClick, boolean closesTray) {
@@ -2258,11 +2549,27 @@ index 0000000..5633415
 +    private TextView editButton(String label, View.OnClickListener onClick) {
 +        TextView b = new TextView(act);
 +        b.setText(label);
-+        b.setTextColor(GOLD);
-+        b.setTypeface(Typeface.DEFAULT_BOLD);
++        b.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-+        b.setPadding(dp(10), dp(9), dp(10), dp(9));
-+        if (onClick != null) b.setOnClickListener(onClick);
++        b.setGravity(Gravity.CENTER);
++        if (onClick != null) {
++            // a real button: pill shape
++            b.setTextColor(Ornate.CREAM);
++            b.setBackground(pillDrawable(false));
++            b.setPadding(dp(12), dp(6), dp(12), dp(6));
++            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++            lp.setMargins(dp(3), dp(3), dp(3), dp(3));
++            b.setLayoutParams(lp);
++            b.setOnClickListener(v -> {
++                touched();
++                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                onClick.onClick(v);
++            });
++        } else {
++            // a label
++            b.setTextColor(Ornate.GOLD_LIGHT);
++            b.setPadding(dp(8), dp(6), dp(8), dp(6));
++        }
 +        return b;
 +    }
 +
@@ -2316,6 +2623,15 @@ index 0000000..5633415
 +            if (c.kind == KIND_HUD) {
 +                continue; // laid out by layoutHudBar() (it has no text label)
 +            }
++            if (c.kind == KIND_MAPVIEW) {
++                int px = dp(c.size);
++                FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(px, px);
++                mlp.leftMargin = (int) (c.x * w - px / 2f);
++                mlp.topMargin = (int) (c.y * h - px / 2f);
++                c.view.setLayoutParams(mlp);
++                if (editing) c.view.setAlpha(c.hidden ? 0.3f : 1f);
++                continue;
++            }
 +            int px = dp(c.size);
 +            int pw = c.kind == KIND_SKIP ? (int) (px * 2.2f) : px;
 +            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(pw, px);
@@ -2336,7 +2652,7 @@ index 0000000..5633415
 +                continue;
 +            }
 +            if (c.kind == KIND_POUND) {
-+                boolean show = editing || (!c.hidden && form == 1);
++                boolean show = editing || (!c.hidden && form != 4); // any mask form (not plain Link)
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
 +                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
 +                continue;
@@ -2412,7 +2728,7 @@ index 0000000..5633415
 +            controlsHidden = false;
 +            releaseAll();
 +            for (Ctl c : ctls) {
-+                if (c.kind != KIND_STICK && c.kind != KIND_HUD) c.view.setVisibility(View.VISIBLE);
++                if (c.kind != KIND_STICK && c.kind != KIND_HUD && (c.kind != KIND_MAPVIEW || ourMap)) c.view.setVisibility(View.VISIBLE);
 +            }
 +        } else {
 +            saveAll();
@@ -2488,6 +2804,7 @@ index 0000000..5633415
 +            case KIND_PANEL: return 140f;   // quest tracker width
 +            case KIND_HUD: return 16f;      // hearts/time bar height
 +            case KIND_MINIMAP: return 30f;
++            case KIND_MAPVIEW: return 70f;
 +            case KIND_SKIP: return 28f;
 +            default: return 30f;
 +        }
@@ -2498,6 +2815,7 @@ index 0000000..5633415
 +            case KIND_PANEL: return 640f;
 +            case KIND_HUD: return 64f;
 +            case KIND_MINIMAP: return 220f;
++            case KIND_MAPVIEW: return 260f;
 +            default: return 170f;
 +        }
 +    }
@@ -2528,7 +2846,8 @@ index 0000000..5633415
 +            case KIND_SKIP: return "skip button";
 +            case KIND_TRAY: return "menu button";
 +            case KIND_WHEEL: return "item wheel";
-+            case KIND_POUND: return "Goron pound (shows as Goron)";
++            case KIND_MAPVIEW: return "mini-map";
++            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
 +    }
@@ -2649,15 +2968,16 @@ index 0000000..5633415
 +    private void autoRunCheck(float out) {
 +        if (!autoRun) return;
 +        long now = System.currentTimeMillis();
-+        if (out >= 0.97f) {
++        // needs the thumb right at the rim of the stick (not just "full speed") for about 2/3 of a second
++        if (out >= 0.985f) {
 +            if (autoRunSince == 0) autoRunSince = now;
-+            if (!autoSprinting && now - autoRunSince > 350) {
++            if (!autoSprinting && now - autoRunSince > 650) {
 +                autoSprinting = true;
 +                act.nativeMmAction(ACT_SPRINT_ON);
 +            }
 +        } else {
 +            autoRunSince = 0;
-+            if (autoSprinting && out < 0.6f) {
++            if (autoSprinting && out < 0.75f) {
 +                autoSprinting = false;
 +                act.nativeMmAction(ACT_SPRINT_OFF);
 +            }
@@ -2685,7 +3005,7 @@ index 0000000..5633415
 +        float mag = d / max;
 +        float out = mag < STICK_DEADZONE ? 0f : (mag - STICK_DEADZONE) / (1f - STICK_DEADZONE);
 +        out = Math.min(1f, out * stickSens); // higher sensitivity = full speed with less thumb travel
-+        autoRunCheck(out);
++        autoRunCheck(mag);
 +        float nx = d > 0 ? dx / d * out : 0, ny = d > 0 ? dy / d * out : 0;
 +        act.setAxis(ControllerButtons.AXIS_LX, (short) (nx * Short.MAX_VALUE));
 +        act.setAxis(ControllerButtons.AXIS_LY, (short) (ny * Short.MAX_VALUE));
@@ -2832,10 +3152,10 @@ index 0000000..5633415
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..b9562e3
+index 0000000..946c659
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,572 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3089,11 +3409,11 @@ index 0000000..b9562e3
 +    // ------------------------------------------------------------------ icons
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
-+            ICON_POUND = 13;
++            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
-+        private final int icon;
++        private int icon;
 +        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final Paint accent = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -3109,6 +3429,13 @@ index 0000000..b9562e3
 +            stroke.setStrokeJoin(Paint.Join.ROUND);
 +            accent.setStyle(Paint.Style.STROKE);
 +            accent.setColor(Color.rgb(40, 90, 80));
++        }
++
++        void setIcon(int icon) {
++            if (this.icon != icon) {
++                this.icon = icon;
++                invalidate();
++            }
 +        }
 +
 +        @Override
@@ -3136,6 +3463,9 @@ index 0000000..b9562e3
 +                case ICON_LOAD: load(c, s); break;
 +                case ICON_PLUS: plus(c, s); break;
 +                case ICON_POUND: pound(c, s); break;
++                case ICON_BOLT: bolt(c, s); break;
++                case ICON_BUBBLE: bubble(c, s); break;
++                case ICON_BEAM: beam(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -3268,6 +3598,41 @@ index 0000000..b9562e3
 +            c.drawPath(p, stroke);
 +        }
 +
++        // Zora barrier: lightning bolt
++        private void bolt(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.58f, s * 0.1f);
++            p.lineTo(s * 0.28f, s * 0.54f);
++            p.lineTo(s * 0.48f, s * 0.54f);
++            p.lineTo(s * 0.4f, s * 0.9f);
++            p.lineTo(s * 0.72f, s * 0.42f);
++            p.lineTo(s * 0.52f, s * 0.42f);
++            p.close();
++            c.drawPath(p, fill);
++        }
++
++        // Deku bubble: a bubble with a shine
++        private void bubble(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.07f);
++            c.drawCircle(s * 0.5f, s * 0.52f, s * 0.3f, stroke);
++            c.drawCircle(s * 0.4f, s * 0.42f, s * 0.07f, fill);
++            c.drawCircle(s * 0.75f, s * 0.22f, s * 0.06f, fill);
++        }
++
++        // Fierce Deity beam: sword with rays
++        private void beam(Canvas c, float s) {
++            sword(c, s);
++            stroke.setStrokeWidth(s * 0.045f);
++            p.reset();
++            p.moveTo(s * 0.8f, s * 0.12f);
++            p.lineTo(s * 0.92f, s * 0.04f);
++            p.moveTo(s * 0.86f, s * 0.24f);
++            p.lineTo(s * 0.98f, s * 0.22f);
++            p.moveTo(s * 0.7f, s * 0.08f);
++            p.lineTo(s * 0.74f, s * -0.02f);
++            c.drawPath(p, stroke);
++        }
++
 +        // Goron pound: a heavy downward arrow hitting the ground, with impact lines
 +        private void pound(Canvas c, float s) {
 +            p.reset();
@@ -3365,10 +3730,10 @@ index 0000000..b9562e3
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
 new file mode 100644
-index 0000000..eaa68b8
+index 0000000..9628329
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,239 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3463,9 +3828,13 @@ index 0000000..eaa68b8
 +        float w = getWidth(), h = getHeight();
 +        c.drawRect(0, 0, w, h, dim);
 +        cx = w / 2f;
-+        cy = h / 2f + dp(6);
-+        ringR = Math.min(h * 0.40f, w * 0.30f);
-+        slotR = Math.max(dp(20), Math.min(dp(30), (float) (Math.PI * ringR / Math.max(8, slots.size())) * 0.82f));
++        cy = h / 2f;
++        // Whole wheel (ring + item slots + rim) must fit inside the screen height
++        float outer = Math.min(h * 0.47f, w * 0.36f);
++        slotR = Math.max(dp(18), Math.min(dp(28), outer * 0.16f));
++        ringR = outer - slotR - dp(8);
++        slotR = Math.min(slotR, (float) (Math.PI * ringR / Math.max(8, slots.size())) * 0.82f);
++        cy = h / 2f;
 +        innerR = ringR - slotR - dp(8);
 +
 +        disc.setShader(new RadialGradient(cx, cy, ringR + slotR, Color.argb(225, 22, 44, 36), Color.argb(235, 8, 16, 14),
@@ -3513,8 +3882,8 @@ index 0000000..eaa68b8
 +        text.setColor(masks ? Ornate.GOLD_LIGHT : Color.argb(140, 240, 232, 210));
 +        c.drawText("Masks", cx + innerR * 0.38f, tabY, text);
 +        text.setColor(Ornate.CREAM);
-+        closeX = cx + ringR + slotR + dp(8) - dp(10);
-+        closeY = cy - ringR - slotR - dp(8) + dp(10);
++        closeX = Math.min(w - dp(24), cx + ringR + slotR + dp(30));
++        closeY = Math.max(dp(24), cy - ringR - slotR + dp(4));
 +        text.setTextSize(dp(20));
 +        c.drawText("\u2715", closeX, closeY + dp(7), text);
 +
@@ -4812,10 +5181,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..b738dd3
+index 0000000..d2ad5ea
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1265 @@
+@@ -0,0 +1,1396 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5680,6 +6049,118 @@ index 0000000..b738dd3
 +    sMarker[0] = 1;
 +}
 +
++// ---------------------------------------------------------------- our own mini-map
++// A clean top-down map built from the area's floor collision: floors near Link's height are drawn into a
++// small grid (so each floor of a dungeon shows separately). Chests and stray fairies are marked.
++// In dungeons the layout only shows once you have the Map, and chests/fairies once you have the Compass.
++static std::mutex sMapMutex;
++static std::vector<uint8_t> sMapGrid;
++static std::vector<int> sMapInfo; // version, minX, minZ, cell, w, h, hasMap, hasCompass, linkX, linkZ, yaw, n, (type,x,z)...
++static int sMapVersion = 0;
++static s32 sMapScene = -1;
++static f32 sMapBandY = -100000.0f;
++static std::atomic<int> sOurMap{ 1 };
++
++static void BuildMapGrid(PlayState* play, f32 bandY, bool useBand) {
++    CollisionHeader* ch = play->colCtx.colHeader;
++    if (ch == nullptr || ch->polyList == nullptr || ch->vtxList == nullptr) return;
++    s32 minX = ch->minBounds.x, minZ = ch->minBounds.z;
++    s32 rangeX = MAX(1, ch->maxBounds.x - minX), rangeZ = MAX(1, ch->maxBounds.z - minZ);
++    s32 cell = MAX(12, MAX(rangeX, rangeZ) / 200);
++    s32 w = rangeX / cell + 1, h = rangeZ / cell + 1;
++    std::vector<uint8_t> grid((size_t)w * h, 0);
++
++    for (s32 i = 0; i < ch->numPolygons; i++) {
++        CollisionPoly* poly = &ch->polyList[i];
++        if (COLPOLY_GET_NORMAL(poly->normal.y) < 0.5f) continue; // floors only
++        Vec3s* a = &ch->vtxList[COLPOLY_VTX_INDEX(poly->vtxData[0])];
++        Vec3s* b = &ch->vtxList[COLPOLY_VTX_INDEX(poly->vtxData[1])];
++        Vec3s* c = &ch->vtxList[COLPOLY_VTX_INDEX(poly->vtxData[2])];
++        f32 y = (a->y + b->y + c->y) / 3.0f;
++        if (useBand && fabsf(y - bandY) > 140.0f) continue; // other floors of the dungeon
++        f32 ax = (a->x - minX) / (f32)cell, az = (a->z - minZ) / (f32)cell;
++        f32 bx = (b->x - minX) / (f32)cell, bz = (b->z - minZ) / (f32)cell;
++        f32 cx = (c->x - minX) / (f32)cell, cz = (c->z - minZ) / (f32)cell;
++        s32 x0 = MAX(0, (s32)floorf(fminf(ax, fminf(bx, cx)))), x1 = MIN(w - 1, (s32)ceilf(fmaxf(ax, fmaxf(bx, cx))));
++        s32 z0 = MAX(0, (s32)floorf(fminf(az, fminf(bz, cz)))), z1 = MIN(h - 1, (s32)ceilf(fmaxf(az, fmaxf(bz, cz))));
++        f32 area = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
++        if (fabsf(area) < 1e-4f) continue;
++        for (s32 gz = z0; gz <= z1; gz++) {
++            for (s32 gx = x0; gx <= x1; gx++) {
++                f32 px = gx + 0.5f, pz = gz + 0.5f;
++                f32 w0 = ((bx - px) * (cz - pz) - (bz - pz) * (cx - px)) / area;
++                f32 w1 = ((cx - px) * (az - pz) - (cz - pz) * (ax - px)) / area;
++                f32 w2 = 1.0f - w0 - w1;
++                if (w0 >= -0.15f && w1 >= -0.15f && w2 >= -0.15f) grid[(size_t)gz * w + gx] = 1;
++            }
++        }
++    }
++    std::lock_guard<std::mutex> lock(sMapMutex);
++    sMapGrid.swap(grid);
++    sMapVersion++;
++    sMapInfo.assign(12, 0);
++    sMapInfo[0] = sMapVersion;
++    sMapInfo[1] = minX;
++    sMapInfo[2] = minZ;
++    sMapInfo[3] = cell;
++    sMapInfo[4] = w;
++    sMapInfo[5] = h;
++}
++
++static void UpdateMiniMap(PlayState* play) {
++    Player* player = GET_PLAYER(play);
++    if (!sOurMap.load() || player == nullptr) return;
++    f32 y = player->actor.world.pos.y;
++    // Dungeons are split into floors by height; outdoors the whole area is drawn (hills would break bands)
++    bool banded = Map_CurRoomHasMapI(play) && (gSaveContext.dungeonSceneSharedIndex < 4);
++    if ((play->sceneId != sMapScene) || (banded && fabsf(y - sMapBandY) > 90.0f)) {
++        sMapScene = play->sceneId;
++        sMapBandY = y;
++        BuildMapGrid(play, y, banded);
++    }
++    if ((play->gameplayFrames % 3) != 0) return;
++
++    bool inDungeon = Map_CurRoomHasMapI(play) && (gSaveContext.dungeonSceneSharedIndex < 4);
++    s32 d = gSaveContext.dungeonSceneSharedIndex;
++    bool hasMap = !inDungeon || CHECK_DUNGEON_ITEM(DUNGEON_MAP, d);
++    bool hasCompass = !inDungeon || CHECK_DUNGEON_ITEM(DUNGEON_COMPASS, d);
++
++    std::vector<int> marks;
++    if (hasCompass) {
++        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_CHEST].first; a != nullptr; a = a->next) {
++            if (fabsf(a->world.pos.y - y) > 200.0f) continue;
++            bool opened = Flags_GetTreasure(play, a->params & 0x1F);
++            marks.push_back(opened ? 2 : 1);
++            marks.push_back((int)a->world.pos.x);
++            marks.push_back((int)a->world.pos.z);
++        }
++        for (s32 cat = 0; cat < ACTORCAT_MAX; cat++) {
++            for (Actor* a = play->actorCtx.actorLists[cat].first; a != nullptr; a = a->next) {
++                if (a->id != ACTOR_EN_ELFORG || fabsf(a->world.pos.y - y) > 200.0f) continue;
++                marks.push_back(3);
++                marks.push_back((int)a->world.pos.x);
++                marks.push_back((int)a->world.pos.z);
++            }
++        }
++    }
++    Vec3f target;
++    if (sTrailOn && MMQuest_GetTarget(&target)) {
++        marks.push_back(4);
++        marks.push_back((int)target.x);
++        marks.push_back((int)target.z);
++    }
++    std::lock_guard<std::mutex> lock(sMapMutex);
++    if (sMapInfo.size() < 12) return;
++    sMapInfo.resize(12);
++    sMapInfo[6] = hasMap;
++    sMapInfo[7] = hasCompass;
++    sMapInfo[8] = (int)player->actor.world.pos.x;
++    sMapInfo[9] = (int)player->actor.world.pos.z;
++    sMapInfo[10] = player->actor.shape.rot.y;
++    sMapInfo[11] = (int)(marks.size() / 3);
++    sMapInfo.insert(sMapInfo.end(), marks.begin(), marks.end());
++}
++
 +// ---------------------------------------------------------------- item/mask wheel: equip to a C button
 +static std::atomic<int> sEquipReq{ -1 }; // (cSlot << 8) | inventory slot
 +
@@ -5746,7 +6227,7 @@ index 0000000..b738dd3
 +
 +static void ApplyMinimap() {
 +    if (!sMinimapReq.exchange(0)) return;
-+    bool visible = sMinimapVals[0].load() != 0;
++    bool visible = (sMinimapVals[0].load() != 0) && !sOurMap.load();
 +    // mode: 1 = hidden, 3 = movable (measured from the left edge of the screen)
 +    CVarSetInteger("gHudEditor.Minimap.Mode", visible ? 3 : 1);
 +    CVarSetInteger("gHudEditor.Minimap.Position.X", sMinimapVals[1].load());
@@ -5847,6 +6328,7 @@ index 0000000..b738dd3
 +    }
 +    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
 +    UpdateMarker(play);
++    UpdateMiniMap(play);
 +    sAAction = play->interfaceCtx.aButtonDoAction;
 +    {
 +        Player* player = GET_PLAYER(play);
@@ -6005,6 +6487,20 @@ index 0000000..b738dd3
 +    return arr;
 +}
 +
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetMapInfo(JNIEnv* env, jobject) {
++    std::lock_guard<std::mutex> lock(sMapMutex);
++    jintArray arr = env->NewIntArray((jsize)sMapInfo.size());
++    if (arr != nullptr && !sMapInfo.empty()) env->SetIntArrayRegion(arr, 0, (jsize)sMapInfo.size(), sMapInfo.data());
++    return arr;
++}
++
++extern "C" JNIEXPORT jbyteArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetMapGrid(JNIEnv* env, jobject) {
++    std::lock_guard<std::mutex> lock(sMapMutex);
++    jbyteArray arr = env->NewByteArray((jsize)sMapGrid.size());
++    if (arr != nullptr && !sMapGrid.empty()) env->SetByteArrayRegion(arr, 0, (jsize)sMapGrid.size(), (const jbyte*)sMapGrid.data());
++    return arr;
++}
++
 +// 48 inventory slots: 0-23 items, 24-47 masks (255 = empty)
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetInventory(JNIEnv* env, jobject) {
 +    jint vals[48];
@@ -6070,6 +6566,10 @@ index 0000000..b738dd3
 +    if (option == 2) sModernHud = value;
 +    if (option == 3) sInstantDoors = value;
 +    if (option == 4) sFpInvertReq = value; // first-person aiming: 1 = inverted up/down
++    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
++        sOurMap = value;
++        sMinimapReq = 1;
++    }
 +}
 +
 +// { health (1/16 hearts), max health, magic, max magic (0 = none), rupees, wallet size, day, time, flags }
