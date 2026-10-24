@@ -139,10 +139,10 @@ index 0000000..b6c94da
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..5716099
+index 0000000..e2b18e6
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,247 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -184,8 +184,17 @@ index 0000000..5716099
 +    private int[] hud = new int[9];
 +    private float scale = 1f;
 +
++    /** MODE_HEARTS = hearts + magic; MODE_INFO = rupees + clock (two separate movable pieces). */
++    public static final int MODE_HEARTS = 0, MODE_INFO = 1;
++    private final int mode;
++
 +    public HudBarView(Context c) {
++        this(c, MODE_HEARTS);
++    }
++
++    public HudBarView(Context c, int mode) {
 +        super(c);
++        this.mode = mode;
 +        heartEmpty.setColor(Color.argb(150, 40, 12, 14));
 +        heartEdge.setStyle(Paint.Style.STROKE);
 +        heartEdge.setColor(Color.argb(230, 30, 8, 8));
@@ -250,23 +259,33 @@ index 0000000..5716099
 +        return Math.max(1, hud[1] / 16);
 +    }
 +
++    // Layout numbers shared by drawing and sizing
++    private float pad() { return dp(4); }
++    private float heartStep() { return heartSize() * 1.7f; }
++    private float heartsTop() { return pad() + heartSize() * 0.62f; }          // centre y of the first row
++    private float heartRowGap() { return heartSize() * 1.85f; }
++    private int heartRows() { return (maxHearts() + 9) / 10; }
++    private float heartsBottom() { return heartsTop() + (heartRows() - 1) * heartRowGap() + heartSize() * 0.5f; }
++    private float magicBarH() { return dp(8); }
++    private float magicLen() { return dp(hud[3] * 1.6f); }
++
 +    @Override
 +    protected void onDraw(Canvas c) {
++        if (mode == MODE_INFO) {
++            drawInfo(c, getHeight() / 2f + text.getTextSize() * 0.35f);
++            return;
++        }
 +        float hs = heartSize();
-+        float step = hs * 1.7f;            // hearts sit close together like the game's
-+        float left = dp(4);                // shared left edge for every row
-+        float x0 = left + hs * 0.75f;
++        float step = heartStep();
++        float x0 = pad() + hs * 0.78f;
 +        int maxHearts = maxHearts();
-+        int perRow = 10;
-+        int rows = (maxHearts + perRow - 1) / perRow;
-+        float y = dp(4) + hs * 0.95f;
 +
 +        // Hearts
 +        int health = hud[0];
 +        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE : Color.argb(230, 30, 8, 8));
 +        for (int i = 0; i < maxHearts; i++) {
-+            float cx = x0 + (i % perRow) * step;
-+            float cy = y + (i / perRow) * hs * 1.9f;
++            float cx = x0 + (i % 10) * step;
++            float cy = heartsTop() + (i / 10) * heartRowGap();
 +            heartPath(cx, cy, hs);
 +            c.drawPath(heart, heartEmpty);
 +            heartFill.setShader(new RadialGradient(cx - hs * 0.3f, cy - hs * 0.45f, hs * 1.4f, Color.rgb(255, 110, 100),
@@ -290,14 +309,14 @@ index 0000000..5716099
 +            c.drawPath(heart, heartEdge);
 +            if (fill > 0) c.drawCircle(cx - hs * 0.42f, cy - hs * 0.38f, hs * 0.16f, heartShine);
 +        }
-+        y += (rows - 1) * hs * 1.9f + hs * 0.75f;
 +
-+        // Magic: gem cap on the left, gold frame, green fill sized to the meter
++        // Magic: a clear gap under the hearts, gold frame, small gem cap at the left end
 +        if (hud[3] > 0) {
-+            float barH = dp(9);
-+            float gs = barH * 0.9f;
-+            float gx = left + gs * 0.75f;
-+            float bl = gx + gs * 0.3f, len = dp(hud[3] * 1.6f);
++            float barH = magicBarH();
++            float y = heartsBottom() + dp(6);
++            float gs = barH * 0.95f;
++            float gx = pad() + gs * 0.75f;
++            float bl = gx + gs * 0.55f, len = magicLen();
 +            r.set(bl, y, bl + len, y + barH);
 +            c.drawRoundRect(r, barH / 2, barH / 2, frameFill);
 +            float frac = Math.max(0f, Math.min(1f, hud[2] / (float) hud[3]));
@@ -311,14 +330,12 @@ index 0000000..5716099
 +                    new int[] { Ornate.GOLD_LIGHT, Ornate.GOLD_MID, Ornate.GOLD_DARK }, null, Shader.TileMode.CLAMP));
 +            c.drawRoundRect(r, barH / 2, barH / 2, frame);
 +            Ornate.drawGem(c, gx, y + barH / 2, gs, gem, gemEdge);
-+            y += barH + dp(3);
-+        } else {
-+            y += dp(1);
 +        }
++    }
 +
-+        // Rupees + clock
-+        float ty = y + text.getTextSize() * 0.85f;
-+        float rx = left;
++    // Rupees + clock on one line
++    private void drawInfo(Canvas c, float ty) {
++        float rx = pad();
 +        float g = dp(5.5f);
 +        Path p = new Path();
 +        p.moveTo(rx + g, ty - g * 2.1f);
@@ -347,22 +364,23 @@ index 0000000..5716099
 +        c.drawText(clock, tx, ty, text);
 +    }
 +
-+    /** Width the HUD needs for the current values. */
++    /** Width this piece needs for the current values. */
 +    public int preferredWidth() {
++        if (mode == MODE_INFO) {
++            return (int) (pad() + dp(11) + dp(4) + text.measureText(String.valueOf(Math.max(hud[4], 999))) + dp(10)
++                    + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + pad());
++        }
 +        float hs = heartSize();
-+        float hearts = dp(4) + hs * 0.75f + (Math.min(maxHearts(), 10) - 1) * hs * 1.7f + hs * 0.8f + dp(4);
-+        float magic = hud[3] > 0 ? (dp(4) + dp(9) + dp(hud[3] * 1.6f) + dp(6)) : 0;
-+        float line = dp(4) + dp(15) + text.measureText("9999") + dp(10) + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(6);
-+        return (int) Math.max(hearts, Math.max(magic, line));
++        float hearts = pad() + hs * 0.78f + (Math.min(maxHearts(), 10) - 1) * heartStep() + hs * 0.8f + pad();
++        float magic = hud[3] > 0 ? (pad() + magicBarH() * 1.5f + magicLen() + pad()) : 0;
++        return (int) Math.max(hearts, magic);
 +    }
 +
-+    /** Height the HUD needs for the current values. */
++    /** Height this piece needs for the current values. */
 +    public int preferredHeight() {
-+        float hs = heartSize();
-+        int rows = (maxHearts() + 9) / 10;
-+        float h = dp(4) + hs * 0.95f + (rows - 1) * hs * 1.9f + hs * 0.75f;
-+        h += hud[3] > 0 ? dp(9) + dp(3) : dp(1);
-+        h += text.getTextSize() * 1.15f + dp(4);
++        if (mode == MODE_INFO) return (int) (text.getTextSize() * 1.6f + pad());
++        float h = heartsBottom() + pad();
++        if (hud[3] > 0) h += dp(6) + magicBarH();
 +        return (int) h;
 +    }
 +
@@ -430,10 +448,10 @@ index fe546c8..638daaa 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..dde4924
+index 0000000..edccb74
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1960 @@
+@@ -0,0 +1,2014 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -595,7 +613,8 @@ index 0000000..dde4924
 +    private boolean touchOnlyPause;
 +    private boolean modernHud;
 +    private HudBarView hudBar;
-+    private Ctl hudCtl, minimapCtl;
++    private Ctl hudCtl, infoCtl, minimapCtl;
++    private HudBarView infoBar;
 +    private TextView hudTypeLabel;
 +    private TextView pauseTypeLabel;
 +    private final ImageView[] gridIcons = new ImageView[24];
@@ -695,6 +714,8 @@ index 0000000..dde4924
 +        questCtl = new Ctl("quest", "", "", KIND_PANEL, 0, STYLE_PLAIN, 0.420f, 0.035f, 360);
 +        hudCtl = new Ctl("hudbar", "", "", KIND_HUD, 0, STYLE_PLAIN, 0.150f, 0.120f, 36);
 +        ctls.add(hudCtl);
++        infoCtl = new Ctl("hudinfo", "", "", KIND_HUD, 1, STYLE_PLAIN, 0.500f, 0.950f, 36);
++        ctls.add(infoCtl);
 +        minimapCtl = new Ctl("minimap", "Map &\ncompass", "", KIND_MINIMAP, 0, STYLE_PLAIN, 0.090f, 0.180f, 80);
 +        ctls.add(minimapCtl);
 +        ctls.add(questCtl);
@@ -900,6 +921,7 @@ index 0000000..dde4924
 +            songsPanel.setVisibility(View.GONE);
 +            pauseWrap.setVisibility(View.GONE);
 +            hudBar.setVisibility(View.GONE);
++            infoBar.setVisibility(View.GONE);
 +            settingsPanel.setVisibility(View.GONE);
 +            toast.setVisibility(View.GONE);
 +            closeMenuBtn.setVisibility(View.VISIBLE);
@@ -1181,40 +1203,57 @@ index 0000000..dde4924
 +
 +    // ---------------------------------------------------------------- slim HUD bar
 +    private void buildHudBar() {
-+        hudBar = new HudBarView(act);
++        hudBar = new HudBarView(act, HudBarView.MODE_HEARTS);
 +        hudBar.setVisibility(View.GONE);
++        infoBar = new HudBarView(act, HudBarView.MODE_INFO);
++        infoBar.setVisibility(View.GONE);
++    }
++
++    private HudBarView hudViewFor(Ctl c) {
++        return c == infoCtl ? infoBar : hudBar;
 +    }
 +
 +    private void attachHudCtl(Ctl c) {
-+        c.view = hudBar;
-+        hudBar.setOnTouchListener((view, e) -> editing ? onCtlEdit(c, e) : false);
-+        root.addView(hudBar, new FrameLayout.LayoutParams(dp(420), dp(36)));
++        HudBarView v = hudViewFor(c);
++        c.view = v;
++        v.setOnTouchListener((view, e) -> editing ? onCtlEdit(c, e) : false);
++        root.addView(v, new FrameLayout.LayoutParams(dp(300), dp(60)));
 +    }
 +
 +    private void updateHudBar() {
-+        boolean show = editing || (modernHud && !hudCtl.hidden && !controlsHidden && ((stateBits & ST_GAMEPLAY) != 0));
-+        if (editing && !modernHud) show = false;
-+        hudBar.setVisibility(show ? View.VISIBLE : View.GONE);
-+        if (!show) return;
-+        int[] hud = act.nativeMmGetHud();
-+        if (hud != null) hudBar.setHud(hud);
-+        layoutHudBar();
++        int[] hud = null;
++        for (Ctl c : new Ctl[] { hudCtl, infoCtl }) {
++            HudBarView v = hudViewFor(c);
++            boolean show = editing || (modernHud && !c.hidden && !controlsHidden && ((stateBits & ST_GAMEPLAY) != 0));
++            if (editing && !modernHud) show = false;
++            v.setVisibility(show ? View.VISIBLE : View.GONE);
++            if (!show) continue;
++            if (hud == null) hud = act.nativeMmGetHud();
++            if (hud != null) v.setHud(hud);
++            layoutHudBar(c);
++        }
 +    }
 +
 +    private void layoutHudBar() {
++        layoutHudBar(hudCtl);
++        layoutHudBar(infoCtl);
++    }
++
++    private void layoutHudBar(Ctl c) {
 +        int w = root.getWidth(), h = root.getHeight();
 +        if (w == 0 || h == 0) return;
-+        hudBar.setScale(hudCtl.size / 36f);
-+        int bw = hudBar.preferredWidth(), bh = hudBar.preferredHeight();
-+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) hudBar.getLayoutParams();
++        HudBarView v = hudViewFor(c);
++        v.setScale(c.size / 36f);
++        int bw = v.preferredWidth(), bh = v.preferredHeight();
++        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) v.getLayoutParams();
 +        if (lp == null) return;
-+        int left = (int) (hudCtl.x * w - bw / 2f), top = (int) (hudCtl.y * h - bh / 2f);
++        int left = (int) (c.x * w - bw / 2f), top = (int) (c.y * h - bh / 2f);
 +        if (lp.width != bw || lp.height != bh || lp.leftMargin != left || lp.topMargin != top) {
 +            lp.width = bw;
 +            lp.height = bh;
 +            lp.leftMargin = left;
 +            lp.topMargin = top;
-+            hudBar.setLayoutParams(lp);
++            v.setLayoutParams(lp);
 +        }
 +    }
 +
@@ -1804,6 +1843,9 @@ index 0000000..dde4924
 +        editBar.setBackground(panelDrawable());
 +        editBar.setVisibility(View.GONE);
 +
++        TextView grip = editButton("\u2725 Move", null);
++        grip.setOnTouchListener((v, e) -> onEditBarDrag(e));
++        row1.addView(grip);
 +        row1.addView(editButton("Done", v -> setEditing(false)));
 +        row1.addView(editButton("Size \u2212", v -> resizeSelected(1f / 1.1f)));
 +        row1.addView(editButton("Size +", v -> resizeSelected(1.1f)));
@@ -1818,7 +1860,7 @@ index 0000000..dde4924
 +        opacityLabel = editButton("", null);
 +        row1.addView(opacityLabel);
 +        row1.addView(editButton("See-through +", v -> setOpacity(opacity + 0.1f)));
-+        row1.addView(editButton("Reset layout", v -> resetLayout()));
++        row1.addView(editButton("Reset layout", v -> confirmReset()));
 +
 +        row2.addView(editButton("Colour:", null));
 +        row2.addView(swatch(Ornate.THEME_GREEN, "Green"));
@@ -1841,6 +1883,27 @@ index 0000000..dde4924
 +        lp.bottomMargin = dp(14);
 +        root.addView(editBar, lp);
 +        updateOpacityLabel();
++    }
++
++    // Drag the editor bar out of the way by its "Move" handle
++    private float barDragDx, barDragDy;
++
++    private boolean onEditBarDrag(MotionEvent e) {
++        switch (e.getActionMasked()) {
++            case MotionEvent.ACTION_DOWN:
++                barDragDx = e.getRawX() - editBar.getX();
++                barDragDy = e.getRawY() - editBar.getY();
++                return true;
++            case MotionEvent.ACTION_MOVE: {
++                float nx = e.getRawX() - barDragDx, ny = e.getRawY() - barDragDy;
++                nx = Math.max(-editBar.getWidth() * 0.6f, Math.min(root.getWidth() - editBar.getWidth() * 0.4f, nx));
++                ny = Math.max(0, Math.min(root.getHeight() - editBar.getHeight() * 0.5f, ny));
++                editBar.setX(nx);
++                editBar.setY(ny);
++                return true;
++            }
++        }
++        return true;
 +    }
 +
 +    private View swatch(int theme, String name) {
@@ -1901,7 +1964,7 @@ index 0000000..dde4924
 +    private void layoutAll() {
 +        int w = root.getWidth(), h = root.getHeight();
 +        if (w == 0 || h == 0) return;
-+        if (hudBar != null && hudCtl != null) layoutHudBar();
++        if (hudBar != null && hudCtl != null && infoBar != null) layoutHudBar();
 +
 +        FrameLayout.LayoutParams sz = (FrameLayout.LayoutParams) stickZone.getLayoutParams();
 +        sz.width = (int) (w * 0.45f);
@@ -1974,6 +2037,15 @@ index 0000000..dde4924
 +        }
 +        e.putFloat("opacity", opacity);
 +        e.apply();
++    }
++
++    private void confirmReset() {
++        new android.app.AlertDialog.Builder(act)
++                .setTitle("Reset layout?")
++                .setMessage("ARE YOU SURE? Every button, panel and colour goes back to its default.")
++                .setPositiveButton("Reset", (d, w) -> resetLayout())
++                .setNegativeButton("Cancel", null)
++                .show();
 +    }
 +
 +    private void resetLayout() {
@@ -2112,7 +2184,7 @@ index 0000000..dde4924
 +    private String ctlName(Ctl c) {
 +        switch (c.kind) {
 +            case KIND_PANEL: return "quest tracker";
-+            case KIND_HUD: return "hearts & time bar";
++            case KIND_HUD: return c == infoCtl ? "rupees & clock" : "hearts & magic";
 +            case KIND_MINIMAP: return "map & compass";
 +            case KIND_STICK: return "stick";
 +            case KIND_SKIP: return "skip button";
@@ -4051,10 +4123,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..10f7da8
+index 0000000..e2ac4bb
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1131 @@
+@@ -0,0 +1,1148 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -4084,6 +4156,7 @@ index 0000000..10f7da8
 +s32 Player_TryCsAction(PlayState* play, Player* thisx, PlayerCsAction csAction);
 +s32 Player_GetMovementSpeedAndYaw(Player* thisx, f32* outSpeedTarget, s16* outYawTarget, f32 speedMode, PlayState* play);
 +void Play_UpdateMain(PlayState* thisx);
++void Message_DrawMain(PlayState* play, Gfx** gfxP);
 +s32 MMQuest_GetStep(void);
 +const char* MMQuest_Title(s32 step);
 +const char* MMQuest_Text(s32 step);
@@ -4786,23 +4859,38 @@ index 0000000..10f7da8
 +static u32 sSkipTick = 0;
 +static s32 sSkipVisibleFrames = 0;
 +
-+// Runs the game very fast and "presses" through text until the cutscene/conversation is over
-+// or a question needs answering (BaseSkippable stops at choice/number boxes).
++// The game types text out while *drawing* the textbox (that's also where it notices the end of a box,
++// a question, etc.). Updating alone never finishes a box, which is why earlier skips only sped things up.
++// So while skipping, the textbox is also "drawn" into a scratch buffer that is thrown away.
++static Gfx sScratchGfx[0x6000];
++
++static void ProcessMessageText(PlayState* play) {
++    if (play->msgCtx.msgMode == MSGMODE_NONE) return;
++    Gfx* gfx = sScratchGfx;
++    Message_DrawMain(play, &gfx);
++    if (gfx >= sScratchGfx + 0x6000) {
++        Crumb("scratch gfx overflow"); // never expected; buffer is far bigger than one textbox
++    }
++}
++
++// Skips the whole cutscene/conversation within a frame or two: text boxes are finished and closed
++// without being shown. It stops at any question, shop menu or number entry so you can answer.
 +static void RunSkip(PlayState* play) {
-+    for (s32 i = 0; i < 90; i++) {
++    for (s32 i = 0; i < 300; i++) {
 +        if (!play->state.running || !BaseSkippable(play) || !(InCutscene(play) || InConversation(play)) ||
 +            (sSkipBudget-- <= 0)) {
 +            sSkipping = false;
 +            Crumb("skip finished");
 +            return;
 +        }
++        MessageContext* msgCtx = &play->msgCtx;
 +        Input* input = CONTROLLER1(&play->state);
 +        u16 savedPress = input->press.button;
 +        u16 savedCur = input->cur.button;
-+        bool inject = (play->msgCtx.msgMode != MSGMODE_NONE) && ((sSkipTick++ & 1) == 0);
++        bool inject = (msgCtx->msgMode != MSGMODE_NONE) && ((sSkipTick++ & 1) == 0);
 +        if (inject) {
-+            // B finishes the line being typed; A (and B) move on to the next box.
-+            u16 btn = (play->msgCtx.msgMode == MSGMODE_TEXT_DISPLAYING) ? BTN_B : (BTN_A | BTN_B);
++            // B finishes the box being typed; A moves on to the next box / closes the last one.
++            u16 btn = (msgCtx->msgMode == MSGMODE_TEXT_DISPLAYING) ? BTN_B : (BTN_A | BTN_B);
 +            input->press.button |= btn;
 +            input->cur.button |= btn;
 +        }
@@ -4811,6 +4899,7 @@ index 0000000..10f7da8
 +            input->press.button = savedPress;
 +            input->cur.button = savedCur;
 +        }
++        ProcessMessageText(play);
 +    }
 +}
 +
