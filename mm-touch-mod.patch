@@ -391,7 +391,7 @@ index 0000000..e2b18e6
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..638daaa 100644
+index fe546c8..83e65b2 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,15 @@ public class MainActivity extends SDLActivity{
@@ -410,7 +410,7 @@ index fe546c8..638daaa 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +964,25 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +964,29 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -431,12 +431,16 @@ index fe546c8..638daaa 100644
 +    public native int[] nativeMmGetHud();
 +    public native int[] nativeMmGetPauseInfo();
 +    public native String nativeMmGetBreadcrumbPath();
++    public native int[] nativeMmGetMarker();
++    public native int[] nativeMmGetAction();
++    public native int[] nativeMmGetInventory();
++    public native void nativeMmEquipC(int cSlot, int invSlot);
 +    public native void nativeMmSetMinimap(int visible, int x, int y, int scale);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +990,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +994,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -446,12 +450,126 @@ index fe546c8..638daaa 100644
      private ViewGroup buttonGroup;
      private int leftStickPointerId = MotionEvent.INVALID_POINTER_ID;
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java b/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java
+new file mode 100644
+index 0000000..6c3817a
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java
+@@ -0,0 +1,108 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.Path;
++import android.graphics.Typeface;
++import android.util.TypedValue;
++import android.view.View;
++
++/**
++ * Objective marker: a small gold diamond over the objective when it's on screen, or a gold arrow at the
++ * screen edge pointing towards it when it isn't. Shows the distance underneath. Never takes touches.
++ */
++public class MarkerView extends View {
++    private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Path p = new Path();
++    private boolean valid;
++    private float nx, ny;   // -1..1 screen space, y up
++    private int distance;   // game units
++    private boolean behind;
++
++    public MarkerView(Context c) {
++        super(c);
++        fill.setColor(Ornate.GOLD_LIGHT);
++        edge.setStyle(Paint.Style.STROKE);
++        edge.setColor(Color.argb(220, 60, 40, 10));
++        text.setColor(Ornate.CREAM);
++        text.setTextAlign(Paint.Align.CENTER);
++        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++    }
++
++    private float dp(float v) {
++        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++    }
++
++    /** data = { valid, x*1000, y*1000, distance, behind } */
++    public void setMarker(int[] data) {
++        if (data == null || data.length < 5) return;
++        boolean v = data[0] != 0;
++        float x = data[1] / 1000f, y = data[2] / 1000f;
++        if (v != valid || Math.abs(x - nx) > 0.003f || Math.abs(y - ny) > 0.003f || data[3] / 40 != distance / 40) {
++            valid = v;
++            nx = x;
++            ny = y;
++            distance = data[3];
++            behind = data[4] != 0;
++            invalidate();
++        }
++    }
++
++    @Override
++    protected void onDraw(Canvas c) {
++        if (!valid) return;
++        float w = getWidth(), h = getHeight();
++        float px = (nx + 1f) / 2f * w, py = (1f - (ny + 1f) / 2f) * h;
++        float margin = dp(34);
++        boolean onScreen = !behind && px > margin && px < w - margin && py > margin && py < h - margin;
++        edge.setStrokeWidth(dp(1.5f));
++        edge.setShadowLayer(dp(3), 0, dp(1), Color.BLACK);
++        fill.setShadowLayer(dp(3), 0, dp(1), Color.argb(170, 0, 0, 0));
++        text.setTextSize(dp(12));
++        text.setShadowLayer(dp(2.5f), 0, dp(1), Color.BLACK);
++        String dist = (distance / 40) + " m";
++
++        if (onScreen) {
++            float s = dp(9);
++            float y = py - dp(14);
++            p.reset();
++            p.moveTo(px, y - s);
++            p.lineTo(px + s * 0.7f, y);
++            p.lineTo(px, y + s);
++            p.lineTo(px - s * 0.7f, y);
++            p.close();
++            c.drawPath(p, fill);
++            c.drawPath(p, edge);
++            c.drawText(dist, px, y + s + dp(14), text);
++            return;
++        }
++        // Off screen: arrow on the edge, pointing at it
++        float cx = w / 2f, cy = h / 2f;
++        float dx = px - cx, dy = py - cy;
++        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) dy = 1;
++        float sx = (w / 2f - margin) / Math.max(1e-3f, Math.abs(dx));
++        float sy = (h / 2f - margin) / Math.max(1e-3f, Math.abs(dy));
++        float k = Math.min(sx, sy);
++        float ax = cx + dx * k, ay = cy + dy * k;
++        float ang = (float) Math.toDegrees(Math.atan2(dy, dx));
++        float s = dp(13);
++        c.save();
++        c.rotate(ang, ax, ay);
++        p.reset();
++        p.moveTo(ax + s, ay);
++        p.lineTo(ax - s * 0.7f, ay - s * 0.75f);
++        p.lineTo(ax - s * 0.35f, ay);
++        p.lineTo(ax - s * 0.7f, ay + s * 0.75f);
++        p.close();
++        c.drawPath(p, fill);
++        c.drawPath(p, edge);
++        c.restore();
++        float tx = ax - (float) Math.cos(Math.toRadians(ang)) * dp(26);
++        float ty = ay - (float) Math.sin(Math.toRadians(ang)) * dp(26) + dp(4);
++        c.drawText(dist, tx, ty, text);
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..11e602c
+index 0000000..5633415
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2083 @@
+@@ -0,0 +1,2260 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -492,13 +610,13 @@ index 0000000..11e602c
 +
 +    // Native actions (MMTouch.cpp)
 +    static final int ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6,
-+            ACT_TRAIL = 7;
++            ACT_TRAIL = 7, ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9;
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
 +            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
-+            KIND_HUD = 6, KIND_MINIMAP = 7;
++            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -613,7 +731,12 @@ index 0000000..11e602c
 +    private boolean touchOnlyPause;
 +    private boolean modernHud;
 +    private HudBarView hudBar;
-+    private Ctl hudCtl, infoCtl, minimapCtl;
++    private Ctl hudCtl, infoCtl, minimapCtl, poundCtl, aCtl;
++    private WheelView wheel;
++    private MarkerView marker;
++    private int form = 0;           // PLAYER_FORM_*: 0 Fierce Deity, 1 Goron, 2 Zora, 3 Deku, 4 human
++    private boolean autoRun, markerOn, fpInverted;
++    private TextView autoRunLabel, markerLabel, aimDirLabel;
 +    private HudBarView infoBar;
 +    private TextView hudTypeLabel;
 +    private TextView pauseTypeLabel;
@@ -667,6 +790,7 @@ index 0000000..11e602c
 +        TextView text;
 +        ImageView icon;
 +        TextView ammo;
++        View iconView;
 +        int shownItem = -2;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
@@ -690,6 +814,9 @@ index 0000000..11e602c
 +        touchOnlyPause = prefs.getBoolean("touchOnlyPause", true);
 +        modernHud = prefs.getBoolean("modernHud", true);
 +        instantDoors = prefs.getBoolean("instantDoors", true);
++        autoRun = prefs.getBoolean("autoRun", true);
++        markerOn = prefs.getBoolean("marker", true);
++        fpInverted = prefs.getBoolean("fpInverted", false);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -707,6 +834,9 @@ index 0000000..11e602c
 +        ctls.add(new Ctl("start", "START", "", KIND_N64, N64_START, STYLE_START, 0.640f, 0.075f, 50));
 +        ctls.add(new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50));
 +        ctls.add(new Ctl("qsave", "Save", "", KIND_ACTION, ACT_QUICKSAVE, STYLE_PLAIN, 0.620f, 0.300f, 50));
++        ctls.add(new Ctl("wheel", "+", "", KIND_WHEEL, 0, STYLE_C, 0.700f, 0.200f, 54));
++        poundCtl = new Ctl("pound", "Pound", "", KIND_POUND, 0, STYLE_PLAIN, 0.880f, 0.470f, 60);
++        ctls.add(poundCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
 +        // Where the stick sits in Fixed mode (only shown in Fixed mode; move/resize it in Edit controls)
 +        fixedStickCtl = new Ctl("fixedstick", "", "", KIND_STICK, 0, STYLE_PLAIN, 0.150f, 0.700f, 120);
@@ -759,6 +889,9 @@ index 0000000..11e602c
 +            else if (c.kind == KIND_HUD) attachHudCtl(c);
 +            else buildCtl(c);
 +        }
++        marker = new MarkerView(act);
++        root.addView(marker, 2, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        marker.setVisibility(View.GONE);
 +        buildSongsPanel();
 +        buildPausePanel();
 +        buildSettingsPanel();
@@ -766,6 +899,7 @@ index 0000000..11e602c
 +        buildEditBar();
 +        buildToast();
 +        buildCloseMenuButton();
++        buildWheel();
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
 +            try {
@@ -779,6 +913,7 @@ index 0000000..11e602c
 +        act.nativeMmSetOption(1, touchOnlyPause ? 1 : 0);
 +        act.nativeMmSetOption(2, modernHud ? 1 : 0);
 +        act.nativeMmSetOption(3, instantDoors ? 1 : 0);
++        act.nativeMmSetOption(4, fpInverted ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -883,6 +1018,8 @@ index 0000000..11e602c
 +            songsPanel.setVisibility(showSongs ? View.VISIBLE : View.GONE);
 +
 +            updateCIcons();
++            updateActionAndForm();
++            updateMarker();
 +            updatePausePanel();
 +            updateHudBar();
 +
@@ -925,6 +1062,8 @@ index 0000000..11e602c
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
 +            notePad.setVisibility(View.GONE);
++            marker.setVisibility(View.GONE);
++            if (wheel.getVisibility() == View.VISIBLE) closeWheel();
 +            pauseWrap.setVisibility(View.GONE);
 +            hudBar.setVisibility(View.GONE);
 +            infoBar.setVisibility(View.GONE);
@@ -996,6 +1135,8 @@ index 0000000..11e602c
 +            case "more": return Ornate.ICON_DOTS;
 +            case "cup": return Ornate.ICON_FAIRY;
 +            case "qsave": return Ornate.ICON_SAVE;
++            case "wheel": return Ornate.ICON_PLUS;
++            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
 +        }
@@ -1044,6 +1185,7 @@ index 0000000..11e602c
 +            t.setText("A");
 +        }
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        if (c.id.equals("a")) aCtl = c;
 +        int iconType = iconFor(c);
 +        if (iconType != Ornate.ICON_NONE) {
 +            Ornate.IconView iconView = new Ornate.IconView(act, iconType);
@@ -1052,6 +1194,7 @@ index 0000000..11e602c
 +            iconLp.setMargins(pad, pad, pad, pad);
 +            v.addView(iconView, iconLp);
 +            t.setVisibility(View.GONE);
++            c.iconView = iconView;
 +        }
 +        if (c.style == STYLE_C && c.value != N64_CUP && c.kind == KIND_N64) {
 +            ImageView iv = new ImageView(act);
@@ -1141,6 +1284,104 @@ index 0000000..11e602c
 +        lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
 +        lp.rightMargin = dp(24);
 +        root.addView(songsPanel, lp);
++    }
++
++    // ---------------------------------------------------------------- item / mask wheel
++    private void buildWheel() {
++        wheel = new WheelView(act, new WheelView.Host() {
++            @Override public Bitmap icon(int item) { return iconFor(item); }
++            @Override public String name(int item) { return itemName(item); }
++            @Override public int[] inventory() { return act.nativeMmGetInventory(); }
++            @Override public int[] cItems() {
++                int[] c = act.nativeMmGetCItems();
++                return c == null ? null : new int[] { c[0], c[1], c[2] };
++            }
++            @Override public void equip(int cSlot, int invSlot) { act.nativeMmEquipC(cSlot, invSlot); }
++            @Override public void close() { closeWheel(); }
++        });
++        wheel.setVisibility(View.GONE);
++        root.addView(wheel, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++    }
++
++    private void openWheel() {
++        if ((stateBits & ST_GAMEPLAY) == 0) return;
++        releaseAll();
++        wheel.refresh();
++        wheel.setVisibility(View.VISIBLE);
++        wheel.bringToFront();
++        // icons may still be loading the first time: refresh a few times
++        for (int i = 1; i <= 5; i++) handler.postDelayed(() -> { if (wheel.getVisibility() == View.VISIBLE) wheel.refresh(); }, 150L * i);
++    }
++
++    private void closeWheel() {
++        wheel.setVisibility(View.GONE);
++    }
++
++    // ---------------------------------------------------------------- Goron pound: one touch holds A, then adds B
++    private final Runnable poundB = new Runnable() {
++        @Override
++        public void run() {
++            ModTouchOverlay.this.act.nativeMmSetN64Button(N64_B, true);
++        }
++    };
++
++    private void startPound() {
++        act.nativeMmSetN64Button(N64_A, true);
++        handler.postDelayed(poundB, 120);
++    }
++
++    private void stopPound() {
++        handler.removeCallbacks(poundB);
++        act.nativeMmSetN64Button(N64_B, false);
++        act.nativeMmSetN64Button(N64_A, false);
++    }
++
++    // ---------------------------------------------------------------- A button shows what it will do
++    private static String actionLabel(int a) {
++        switch (a) {
++            case 0x01: return "Check"; case 0x02: return "Enter"; case 0x03: return "Return"; case 0x04: return "Open";
++            case 0x05: return "Jump"; case 0x06: return "Decide"; case 0x07: return "Dive"; case 0x08: return "Faster";
++            case 0x09: return "Throw"; case 0x0B: return "Climb"; case 0x0C: return "Drop"; case 0x0D: return "Down";
++            case 0x0E: return "Quit"; case 0x0F: return "Talk"; case 0x10: return "Next"; case 0x11: return "Grab";
++            case 0x12: return "Stop"; case 0x13: return "Put Away"; case 0x14: return "Reel"; case 0x15: return "Info";
++            case 0x16: return "Warp"; case 0x17: return "Snap"; case 0x18: return "Explode"; case 0x19: return "Dance";
++            case 0x1A: return "March"; case 0x23: return "Curl"; case 0x24: return "Surface"; case 0x25: return "Swim";
++            case 0x26: return "Punch"; case 0x27: return "Pound"; case 0x28: return "Hook"; case 0x29: return "Shoot";
++            default:
++                if (a >= 0x1B && a <= 0x22) return String.valueOf(a - 0x1A); // counting 1-8
++                return null; // nothing special: show the hand
++        }
++    }
++
++    private int lastAction = -99;
++
++    private void updateActionAndForm() {
++        int[] a = act.nativeMmGetAction();
++        if (a == null || a.length < 2) return;
++        if (a[1] != form) {
++            form = a[1];
++            layoutAll(); // Goron pound button appears/disappears
++        }
++        if (aCtl == null || aCtl.iconView == null || a[0] == lastAction) return;
++        lastAction = a[0];
++        String label = actionLabel(a[0]);
++        if (label == null) {
++            aCtl.text.setVisibility(View.GONE);
++            aCtl.iconView.setVisibility(View.VISIBLE);
++        } else {
++            aCtl.text.setText(label);
++            aCtl.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(aCtl.size) * (label.length() > 5 ? 0.17f : 0.21f));
++            aCtl.text.setVisibility(View.VISIBLE);
++            aCtl.iconView.setVisibility(View.GONE);
++        }
++    }
++
++    // ---------------------------------------------------------------- objective marker
++    private void updateMarker() {
++        boolean show = markerOn && !editing && !controlsHidden && ((stateBits & ST_SHOW_QUEST) != 0)
++                && ((stateBits & ST_TRAIL) != 0);
++        marker.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (show) marker.setMarker(act.nativeMmGetMarker());
 +    }
 +
 +    // ---------------------------------------------------------------- free-play ocarina pad
@@ -1746,6 +1987,22 @@ index 0000000..11e602c
 +            act.nativeMmSetOption(3, instantDoors ? 1 : 0);
 +            refreshSettings();
 +        });
++        autoRunLabel = settingsRow(settingsPanel, "Auto-run", null, null, "Change", () -> {
++            autoRun = !autoRun;
++            prefs.edit().putBoolean("autoRun", autoRun).apply();
++            refreshSettings();
++        });
++        markerLabel = settingsRow(settingsPanel, "Objective marker", null, null, "Change", () -> {
++            markerOn = !markerOn;
++            prefs.edit().putBoolean("marker", markerOn).apply();
++            refreshSettings();
++        });
++        aimDirLabel = settingsRow(settingsPanel, "Aim up/down", null, null, "Change", () -> {
++            fpInverted = !fpInverted;
++            prefs.edit().putBoolean("fpInverted", fpInverted).apply();
++            act.nativeMmSetOption(4, fpInverted ? 1 : 0);
++            refreshSettings();
++        });
 +        hudTypeLabel = settingsRow(settingsPanel, "Game HUD", null, null, "Change", () -> {
 +            modernHud = !modernHud;
 +            prefs.edit().putBoolean("modernHud", modernHud).apply();
@@ -1809,6 +2066,9 @@ index 0000000..11e602c
 +        hudTypeLabel.setText(modernHud ? "Slim bar" : "Original");
 +        aimSensLabel.setText(String.format(java.util.Locale.US, "%.2f\u00D7", aimSens));
 +        doorsLabel.setText(instantDoors ? "Instant" : "Fade");
++        autoRunLabel.setText(autoRun ? "On" : "Off");
++        markerLabel.setText(markerOn ? "On" : "Off");
++        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
 +    private TextView trailTile, questTile, hideTile;
@@ -2075,6 +2335,12 @@ index 0000000..11e602c
 +                if (editing) c.view.setAlpha(1f);
 +                continue;
 +            }
++            if (c.kind == KIND_POUND) {
++                boolean show = editing || (!c.hidden && form == 1);
++                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
++                continue;
++            }
 +            if (c.kind != KIND_SKIP) {
 +                boolean show = !c.hidden || editing;
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -2196,6 +2462,8 @@ index 0000000..11e602c
 +                setPressed(c, true);
 +                c.view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
 +                switch (c.kind) {
++                    case KIND_WHEEL: openWheel(); break;
++                    case KIND_POUND: startPound(); break;
 +                    case KIND_N64: act.nativeMmSetN64Button(c.value, true); break;
 +                    case KIND_ACTION:
 +                    case KIND_SKIP: act.nativeMmAction(c.value); break;
@@ -2206,6 +2474,7 @@ index 0000000..11e602c
 +            case MotionEvent.ACTION_CANCEL:
 +                setPressed(c, false);
 +                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
++                if (c.kind == KIND_POUND) stopPound();
 +                return true;
 +        }
 +        return true;
@@ -2258,6 +2527,8 @@ index 0000000..11e602c
 +            case KIND_STICK: return "stick";
 +            case KIND_SKIP: return "skip button";
 +            case KIND_TRAY: return "menu button";
++            case KIND_WHEEL: return "item wheel";
++            case KIND_POUND: return "Goron pound (shows as Goron)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
 +    }
@@ -2360,6 +2631,7 @@ index 0000000..11e602c
 +            case MotionEvent.ACTION_CANCEL:
 +                if (e.getActionMasked() == MotionEvent.ACTION_CANCEL || e.getPointerId(idx) == stickPointer) {
 +                    stickPointer = -1;
++                    autoRunCheck(0f);
 +                    act.setAxis(ControllerButtons.AXIS_LX, (short) 0);
 +                    act.setAxis(ControllerButtons.AXIS_LY, (short) 0);
 +                    stickBase.setVisibility(View.GONE);
@@ -2368,6 +2640,28 @@ index 0000000..11e602c
 +                return true;
 +        }
 +        return true;
++    }
++
++    // Auto-run: hold the stick right at its edge for a moment to start sprinting; ease off to stop.
++    private long autoRunSince = 0;
++    private boolean autoSprinting = false;
++
++    private void autoRunCheck(float out) {
++        if (!autoRun) return;
++        long now = System.currentTimeMillis();
++        if (out >= 0.97f) {
++            if (autoRunSince == 0) autoRunSince = now;
++            if (!autoSprinting && now - autoRunSince > 350) {
++                autoSprinting = true;
++                act.nativeMmAction(ACT_SPRINT_ON);
++            }
++        } else {
++            autoRunSince = 0;
++            if (autoSprinting && out < 0.6f) {
++                autoSprinting = false;
++                act.nativeMmAction(ACT_SPRINT_OFF);
++            }
++        }
 +    }
 +
 +    private void updateStick(float tx, float ty) {
@@ -2391,6 +2685,7 @@ index 0000000..11e602c
 +        float mag = d / max;
 +        float out = mag < STICK_DEADZONE ? 0f : (mag - STICK_DEADZONE) / (1f - STICK_DEADZONE);
 +        out = Math.min(1f, out * stickSens); // higher sensitivity = full speed with less thumb travel
++        autoRunCheck(out);
 +        float nx = d > 0 ? dx / d * out : 0, ny = d > 0 ? dy / d * out : 0;
 +        act.setAxis(ControllerButtons.AXIS_LX, (short) (nx * Short.MAX_VALUE));
 +        act.setAxis(ControllerButtons.AXIS_LY, (short) (ny * Short.MAX_VALUE));
@@ -2537,10 +2832,10 @@ index 0000000..11e602c
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..03b27a8
+index 0000000..b9562e3
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,488 @@
+@@ -0,0 +1,527 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -2793,7 +3088,8 @@ index 0000000..03b27a8
 +
 +    // ------------------------------------------------------------------ icons
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
-+            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11;
++            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
++            ICON_POUND = 13;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -2838,6 +3134,8 @@ index 0000000..03b27a8
 +                case ICON_HAND: hand(c, s); break;
 +                case ICON_SAVE: save(c, s); break;
 +                case ICON_LOAD: load(c, s); break;
++                case ICON_PLUS: plus(c, s); break;
++                case ICON_POUND: pound(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -2957,6 +3255,42 @@ index 0000000..03b27a8
 +            c.drawPath(p, fill);
 +        }
 +
++        // Item wheel: a ring with a plus in it
++        private void plus(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.07f);
++            c.drawCircle(s * 0.5f, s * 0.5f, s * 0.34f, stroke);
++            stroke.setStrokeWidth(s * 0.09f);
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.32f);
++            p.lineTo(s * 0.5f, s * 0.68f);
++            p.moveTo(s * 0.32f, s * 0.5f);
++            p.lineTo(s * 0.68f, s * 0.5f);
++            c.drawPath(p, stroke);
++        }
++
++        // Goron pound: a heavy downward arrow hitting the ground, with impact lines
++        private void pound(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.66f);
++            p.lineTo(s * 0.72f, s * 0.42f);
++            p.lineTo(s * 0.59f, s * 0.42f);
++            p.lineTo(s * 0.59f, s * 0.14f);
++            p.lineTo(s * 0.41f, s * 0.14f);
++            p.lineTo(s * 0.41f, s * 0.42f);
++            p.lineTo(s * 0.28f, s * 0.42f);
++            p.close();
++            c.drawPath(p, fill);
++            stroke.setStrokeWidth(s * 0.06f);
++            p.reset();
++            p.moveTo(s * 0.18f, s * 0.8f);
++            p.lineTo(s * 0.82f, s * 0.8f);
++            p.moveTo(s * 0.2f, s * 0.68f);
++            p.lineTo(s * 0.12f, s * 0.6f);
++            p.moveTo(s * 0.8f, s * 0.68f);
++            p.lineTo(s * 0.88f, s * 0.6f);
++            c.drawPath(p, stroke);
++        }
++
 +        // An open hand: "interact"
 +        private void hand(Canvas c, float s) {
 +            stroke.setStrokeWidth(s * 0.1f);
@@ -3027,6 +3361,247 @@ index 0000000..03b27a8
 +                    Shader.TileMode.CLAMP));
 +            c.drawCircle(s * 0.5f, s * 0.55f, s * 0.3f, glow);
 +        }
++    }
++}
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
+new file mode 100644
+index 0000000..eaa68b8
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
+@@ -0,0 +1,235 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.RadialGradient;
++import android.graphics.RectF;
++import android.graphics.Shader;
++import android.graphics.Typeface;
++import android.util.TypedValue;
++import android.view.MotionEvent;
++import android.view.View;
++
++import java.util.ArrayList;
++import java.util.List;
++
++/**
++ * Radial item / mask wheel. Items you own sit around a ring; tap one (or slide onto it), then tap one of
++ * the three C buttons in the middle to put it there. Tap outside the ring, or the X, to close.
++ */
++public class WheelView extends View {
++    interface Host {
++        Bitmap icon(int item);
++        String name(int item);
++        int[] inventory();       // 48 slots: 0-23 items, 24-47 masks (255 = empty)
++        int[] cItems();          // current C button items
++        void equip(int cSlot, int invSlot);
++        void close();
++    }
++
++    private final Host host;
++    private final Paint dim = new Paint();
++    private final Paint disc = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint slot = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint slotSel = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint small = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG);
++    private final RectF rf = new RectF();
++
++    private boolean masks = false;
++    private final List<Integer> slots = new ArrayList<>(); // inventory slot indices shown on the ring
++    private int selected = -1;                             // index into slots
++    private int[] inv = new int[48];
++    private int[] cItems = { 255, 255, 255 };
++
++    // geometry (computed in onDraw, reused for touch)
++    private float cx, cy, ringR, slotR, innerR;
++    private final float[] cBtnX = new float[3];
++    private float cBtnY, cBtnR, tabY, closeX, closeY;
++
++    public WheelView(Context c, Host host) {
++        super(c);
++        this.host = host;
++        dim.setColor(Color.argb(150, 0, 0, 0));
++        ring.setStyle(Paint.Style.STROKE);
++        slot.setColor(Color.argb(170, 24, 40, 34));
++        slotSel.setStyle(Paint.Style.STROKE);
++        slotSel.setColor(Ornate.GOLD_LIGHT);
++        text.setColor(Ornate.CREAM);
++        text.setTextAlign(Paint.Align.CENTER);
++        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        small.setColor(Ornate.CREAM);
++        small.setTextAlign(Paint.Align.CENTER);
++        small.setTypeface(Typeface.DEFAULT_BOLD);
++    }
++
++    private float dp(float v) {
++        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++    }
++
++    /** Call when opening, and whenever the inventory may have changed. */
++    public void refresh() {
++        int[] i = host.inventory();
++        if (i != null && i.length >= 48) inv = i;
++        int[] c = host.cItems();
++        if (c != null && c.length >= 3) cItems = c;
++        slots.clear();
++        int base = masks ? 24 : 0;
++        for (int s = 0; s < 24; s++) {
++            if (inv[base + s] != 255) slots.add(base + s);
++        }
++        if (selected >= slots.size()) selected = -1;
++        invalidate();
++    }
++
++    @Override
++    protected void onDraw(Canvas c) {
++        float w = getWidth(), h = getHeight();
++        c.drawRect(0, 0, w, h, dim);
++        cx = w / 2f;
++        cy = h / 2f + dp(6);
++        ringR = Math.min(h * 0.40f, w * 0.30f);
++        slotR = Math.max(dp(20), Math.min(dp(30), (float) (Math.PI * ringR / Math.max(8, slots.size())) * 0.82f));
++        innerR = ringR - slotR - dp(8);
++
++        disc.setShader(new RadialGradient(cx, cy, ringR + slotR, Color.argb(225, 22, 44, 36), Color.argb(235, 8, 16, 14),
++                Shader.TileMode.CLAMP));
++        c.drawCircle(cx, cy, ringR + slotR + dp(8), disc);
++        ring.setStrokeWidth(dp(3));
++        ring.setColor(Ornate.GOLD_MID);
++        c.drawCircle(cx, cy, ringR + slotR + dp(8), ring);
++        ring.setStrokeWidth(dp(1));
++        ring.setColor(Color.argb(120, 246, 222, 150));
++        c.drawCircle(cx, cy, innerR, ring);
++
++        // Items around the ring
++        int n = slots.size();
++        for (int i = 0; i < n; i++) {
++            double a = -Math.PI / 2 + i * 2 * Math.PI / n;
++            float sx = cx + (float) Math.cos(a) * ringR, sy = cy + (float) Math.sin(a) * ringR;
++            c.drawCircle(sx, sy, slotR, slot);
++            int item = inv[slots.get(i)];
++            Bitmap b = host.icon(item);
++            if (b != null) {
++                float r = slotR * 0.78f;
++                rf.set(sx - r, sy - r, sx + r, sy + r);
++                c.drawBitmap(b, null, rf, bmpPaint);
++            }
++            boolean onC = item == cItems[0] || item == cItems[1] || item == cItems[2];
++            if (i == selected) {
++                slotSel.setStrokeWidth(dp(3));
++                c.drawCircle(sx, sy, slotR + dp(2), slotSel);
++            } else if (onC) {
++                slotSel.setStrokeWidth(dp(1.2f));
++                c.drawCircle(sx, sy, slotR, slotSel);
++            }
++        }
++        if (n == 0) {
++            text.setTextSize(dp(15));
++            c.drawText(masks ? "No masks yet" : "No items yet", cx, cy - ringR * 0.5f, text);
++        }
++
++        // Tabs + close
++        tabY = cy - innerR * 0.62f;
++        text.setTextSize(dp(15));
++        text.setColor(masks ? Color.argb(140, 240, 232, 210) : Ornate.GOLD_LIGHT);
++        c.drawText("Items", cx - innerR * 0.38f, tabY, text);
++        text.setColor(masks ? Ornate.GOLD_LIGHT : Color.argb(140, 240, 232, 210));
++        c.drawText("Masks", cx + innerR * 0.38f, tabY, text);
++        text.setColor(Ornate.CREAM);
++        closeX = cx + ringR + slotR + dp(8) - dp(10);
++        closeY = cy - ringR - slotR - dp(8) + dp(10);
++        text.setTextSize(dp(20));
++        c.drawText("\u2715", closeX, closeY + dp(7), text);
++
++        // Selected item's name
++        text.setTextSize(dp(14));
++        String label = selected >= 0 && selected < n ? host.name(inv[slots.get(selected)]) : "Tap an item";
++        c.drawText(label, cx, cy - innerR * 0.15f, text);
++
++        // The three C buttons to put it on
++        cBtnR = Math.min(dp(24), innerR * 0.26f);
++        cBtnY = cy + innerR * 0.38f;
++        String[] arrows = { "\u25C0", "\u25BC", "\u25B6" };
++        for (int i = 0; i < 3; i++) {
++            cBtnX[i] = cx + (i - 1) * cBtnR * 2.5f;
++            Ornate.ButtonDrawable d = new Ornate.ButtonDrawable(ModTouchOverlay.STYLE_C, false, Ornate.THEME_YELLOW);
++            d.setBounds((int) (cBtnX[i] - cBtnR), (int) (cBtnY - cBtnR), (int) (cBtnX[i] + cBtnR), (int) (cBtnY + cBtnR));
++            d.draw(c);
++            Bitmap b = host.icon(cItems[i]);
++            if (b != null) {
++                float r = cBtnR * 0.6f;
++                rf.set(cBtnX[i] - r, cBtnY - r, cBtnX[i] + r, cBtnY + r);
++                c.drawBitmap(b, null, rf, bmpPaint);
++            } else {
++                small.setTextSize(cBtnR * 0.8f);
++                c.drawText(arrows[i], cBtnX[i], cBtnY + cBtnR * 0.28f, small);
++            }
++        }
++        small.setTextSize(dp(11));
++        c.drawText(selected >= 0 ? "Tap a C button to equip" : "", cx, cBtnY + cBtnR + dp(14), small);
++    }
++
++    @Override
++    public boolean onTouchEvent(MotionEvent e) {
++        float x = e.getX(), y = e.getY();
++        int action = e.getActionMasked();
++        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
++            int hit = hitSlot(x, y);
++            if (hit >= 0 && hit != selected) {
++                selected = hit;
++                performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
++                invalidate();
++            }
++            return true;
++        }
++        if (action != MotionEvent.ACTION_UP) return true;
++
++        if (dist(x, y, closeX, closeY) < dp(24)) {
++            host.close();
++            return true;
++        }
++        for (int i = 0; i < 3; i++) {
++            if (dist(x, y, cBtnX[i], cBtnY) < cBtnR * 1.15f) {
++                if (selected >= 0 && selected < slots.size()) {
++                    host.equip(i, slots.get(selected));
++                    host.close();
++                }
++                return true;
++            }
++        }
++        if (Math.abs(y - tabY) < dp(18) && Math.abs(x - cx) < innerR) {
++            boolean wantMasks = x > cx;
++            if (wantMasks != masks) {
++                masks = wantMasks;
++                selected = -1;
++                refresh();
++            }
++            return true;
++        }
++        if (dist(x, y, cx, cy) > ringR + slotR + dp(12)) {
++            host.close(); // tapped outside the wheel
++        }
++        return true;
++    }
++
++    private int hitSlot(float x, float y) {
++        int n = slots.size();
++        for (int i = 0; i < n; i++) {
++            double a = -Math.PI / 2 + i * 2 * Math.PI / n;
++            float sx = cx + (float) Math.cos(a) * ringR, sy = cy + (float) Math.sin(a) * ringR;
++            if (dist(x, y, sx, sy) < slotR * 1.1f) return i;
++        }
++        return -1;
++    }
++
++    private static float dist(float ax, float ay, float bx, float by) {
++        float dx = ax - bx, dy = ay - by;
++        return (float) Math.sqrt(dx * dx + dy * dy);
 +    }
 +}
 diff --git a/mm/2s2h/Enhancements/Touch/MMExitGraph.c b/mm/2s2h/Enhancements/Touch/MMExitGraph.c
@@ -3650,10 +4225,10 @@ index 0000000..b9e2c10
 +};
 diff --git a/mm/2s2h/Enhancements/Touch/MMQuest.c b/mm/2s2h/Enhancements/Touch/MMQuest.c
 new file mode 100644
-index 0000000..fc9be19
+index 0000000..9b88ea1
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMQuest.c
-@@ -0,0 +1,548 @@
+@@ -0,0 +1,555 @@
 +// Majora's Mask touch mod: main quest tracker + Tatl trail (ported from the Recompiled mod).
 +#include "global.h"
 +#include "MMQuestData.h"
@@ -4202,6 +4777,13 @@ index 0000000..fc9be19
 +        DrawTrail(play, player);
 +    }
 +}
++
++// Current objective position (exit/door or objective spot) for the on-screen marker
++s32 MMQuest_GetTarget(Vec3f* out) {
++    if (!sHaveTarget) return false;
++    *out = sTarget;
++    return true;
++}
 diff --git a/mm/2s2h/Enhancements/Touch/MMQuestData.h b/mm/2s2h/Enhancements/Touch/MMQuestData.h
 new file mode 100644
 index 0000000..41e8575
@@ -4230,10 +4812,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..3296fbd
+index 0000000..b738dd3
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1147 @@
+@@ -0,0 +1,1265 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -4271,6 +4853,8 @@ index 0000000..3296fbd
 +void MMQuest_Progress(s32 step, s32* index, s32* count);
 +void MMQuest_Update(PlayState* play, s32 trailOn);
 +u8* MMQuest_VisitedArray(void);
++s32 MMQuest_GetTarget(Vec3f* out);
++#include "z64skin_matrix.h"
 +s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
@@ -4287,6 +4871,7 @@ index 0000000..3296fbd
 +
 +enum {
 +    ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6, ACT_TRAIL = 7,
++    ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9, // auto-run
 +};
 +
 +// State bits reported to the overlay
@@ -5066,6 +5651,83 @@ index 0000000..3296fbd
 +    }
 +}
 +
++// ---------------------------------------------------------------- objective marker, A action, form
++static std::atomic<int> sMarker[5];  // valid, x*1000, y*1000 (screen -1..1, y up), distance, behind camera
++static std::atomic<int> sAAction{ -1 };
++static std::atomic<int> sForm{ 0 };
++
++static void UpdateMarker(PlayState* play) {
++    Vec3f target, proj;
++    f32 w;
++    Player* player = GET_PLAYER(play);
++    if ((player == nullptr) || !MMQuest_GetTarget(&target) || !sTrailOn) {
++        sMarker[0] = 0;
++        return;
++    }
++    SkinMatrix_Vec3fMtxFMultXYZW(&play->viewProjectionMtxF, &target, &proj, &w);
++    bool behind = w <= 1.0f;
++    f32 inv = (fabsf(w) < 1.0f) ? 1.0f : (1.0f / fabsf(w));
++    f32 x = proj.x * inv, y = proj.y * inv;
++    if (behind) {
++        // Behind the camera: push the arrow to the bottom edge, on the side the target is on
++        x = -x;
++        y = -1.5f;
++    }
++    sMarker[1] = (int)(fmaxf(-50.0f, fminf(50.0f, x)) * 1000.0f);
++    sMarker[2] = (int)(fmaxf(-50.0f, fminf(50.0f, y)) * 1000.0f);
++    sMarker[3] = (int)Math_Vec3f_DistXYZ(&player->actor.world.pos, &target);
++    sMarker[4] = behind ? 1 : 0;
++    sMarker[0] = 1;
++}
++
++// ---------------------------------------------------------------- item/mask wheel: equip to a C button
++static std::atomic<int> sEquipReq{ -1 }; // (cSlot << 8) | inventory slot
++
++static void ApplyEquip(PlayState* play) {
++    int req = sEquipReq.exchange(-1);
++    if (req < 0) return;
++    int cSlot = (req >> 8) & 3, inv = req & 0xFF;
++    if (cSlot > 2 || inv >= 48) return;
++    if (IS_PAUSED(&play->pauseCtx) || Play_InCsMode(play) || (play->msgCtx.msgMode != MSGMODE_NONE)) {
++        PostMessage("Can't change items right now");
++        return;
++    }
++    u8 item = gSaveContext.save.saveInfo.inventory.items[inv];
++    if (item == ITEM_NONE) return;
++    // Magic arrows go on the C button as "bow with that arrow", like the pause menu does
++    if (item == ITEM_ARROW_FIRE) item = ITEM_BOW_FIRE;
++    else if (item == ITEM_ARROW_ICE) item = ITEM_BOW_ICE;
++    else if (item == ITEM_ARROW_LIGHT) item = ITEM_BOW_LIGHT;
++    if ((item >= ITEM_BOW_FIRE) && (item <= ITEM_BOW_LIGHT) && (INV_CONTENT(ITEM_BOW) != ITEM_BOW)) return;
++
++    s32 target = EQUIP_SLOT_C_LEFT + cSlot;
++    u8 oldItem = BUTTON_ITEM_EQUIP(0, target);
++    u8 oldSlot = C_SLOT_EQUIP(0, target);
++    // If it's already on another C button, the two swap places
++    for (s32 b = EQUIP_SLOT_C_LEFT; b <= EQUIP_SLOT_C_RIGHT; b++) {
++        if ((b != target) && (C_SLOT_EQUIP(0, b) == inv)) {
++            BUTTON_ITEM_EQUIP(0, b) = oldItem;
++            C_SLOT_EQUIP(0, b) = oldSlot;
++            if (oldItem != ITEM_NONE) Interface_LoadItemIconImpl(play, b);
++        }
++    }
++    BUTTON_ITEM_EQUIP(0, target) = item;
++    C_SLOT_EQUIP(0, target) = inv;
++    Interface_LoadItemIconImpl(play, target);
++    Audio_PlaySfx(NA_SE_SY_DECIDE);
++    Crumb("equip " + std::to_string(item) + " to C" + std::to_string(cSlot));
++}
++
++static std::atomic<int> sFpInvertReq{ -1 };
++
++static void ApplyOptions() {
++    int inv = sFpInvertReq.exchange(-1);
++    if (inv >= 0) {
++        CVarSetInteger("gEnhancements.Camera.FirstPerson.InvertY", inv);
++        CVarSave();
++    }
++}
++
 +// ---------------------------------------------------------------- per-frame (end of Play_Update, z_play.c)
 +static s32 sLastStep = -1;
 +
@@ -5120,6 +5782,10 @@ index 0000000..3296fbd
 +    if (sFastTravelOpen && !IS_PAUSED(&play->pauseCtx)) FinishFastTravel(play);
 +
 +    if (TakeRequest(ACT_SPRINT)) SetSprint(!sSprintOn);
++    if (TakeRequest(ACT_SPRINT_ON) && !sSprintOn) SetSprint(true);
++    if (TakeRequest(ACT_SPRINT_OFF) && sSprintOn) SetSprint(false);
++    ApplyEquip(play);
++    ApplyOptions();
 +    if (TakeRequest(ACT_TRAIL)) {
 +        sTrailOn = !sTrailOn;
 +        PostMessage(sTrailOn ? "Tatl's trail on" : "Tatl's trail off");
@@ -5180,8 +5846,11 @@ index 0000000..3296fbd
 +        bits |= ST_GAMEPLAY;
 +    }
 +    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
++    UpdateMarker(play);
++    sAAction = play->interfaceCtx.aButtonDoAction;
 +    {
 +        Player* player = GET_PLAYER(play);
++        if (player != nullptr) sForm = player->transformation;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_100000)) bits |= ST_AIMING;
 +        if (InConversation(play)) bits |= ST_TEXT;
 +    }
@@ -5319,6 +5988,36 @@ index 0000000..3296fbd
 +    return arr;
 +}
 +
++// { valid, x*1000, y*1000, distance, behind } for the objective marker
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetMarker(JNIEnv* env, jobject) {
++    jint vals[5];
++    for (int i = 0; i < 5; i++) vals[i] = sMarker[i].load();
++    jintArray arr = env->NewIntArray(5);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 5, vals);
++    return arr;
++}
++
++// { A button action (DO_ACTION_*), current form (PLAYER_FORM_*) }
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetAction(JNIEnv* env, jobject) {
++    jint vals[2] = { sAAction.load(), sForm.load() };
++    jintArray arr = env->NewIntArray(2);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 2, vals);
++    return arr;
++}
++
++// 48 inventory slots: 0-23 items, 24-47 masks (255 = empty)
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetInventory(JNIEnv* env, jobject) {
++    jint vals[48];
++    for (int i = 0; i < 48; i++) vals[i] = gSaveContext.save.saveInfo.inventory.items[i];
++    jintArray arr = env->NewIntArray(48);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 48, vals);
++    return arr;
++}
++
++extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmEquipC(JNIEnv*, jobject, jint cSlot, jint inv) {
++    if (cSlot >= 0 && cSlot <= 2 && inv >= 0 && inv < 48) sEquipReq = (cSlot << 8) | inv;
++}
++
 +extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetBreadcrumbPath(JNIEnv* env, jobject) {
 +    return MakeJString(env, Ship::Context::GetPathRelativeToAppDirectory("mm_breadcrumbs.txt"));
 +}
@@ -5370,6 +6069,7 @@ index 0000000..3296fbd
 +    if (option == 1) sTouchOnlyPause = value;
 +    if (option == 2) sModernHud = value;
 +    if (option == 3) sInstantDoors = value;
++    if (option == 4) sFpInvertReq = value; // first-person aiming: 1 = inverted up/down
 +}
 +
 +// { health (1/16 hearts), max health, magic, max magic (0 = none), rupees, wallet size, day, time, flags }
