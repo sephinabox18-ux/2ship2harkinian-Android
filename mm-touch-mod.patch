@@ -448,10 +448,10 @@ index fe546c8..638daaa 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..edccb74
+index 0000000..11e602c
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2014 @@
+@@ -0,0 +1,2083 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -706,6 +706,8 @@ index 0000000..edccb74
 +        // Optional buttons: hidden until you show them in Edit controls (double-tap)
 +        ctls.add(new Ctl("start", "START", "", KIND_N64, N64_START, STYLE_START, 0.640f, 0.075f, 50));
 +        ctls.add(new Ctl("map", "Map", "", KIND_ACTION, ACT_MAP, STYLE_PLAIN, 0.580f, 0.075f, 50));
++        ctls.add(new Ctl("qsave", "Save", "", KIND_ACTION, ACT_QUICKSAVE, STYLE_PLAIN, 0.620f, 0.300f, 50));
++        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
 +        // Where the stick sits in Fixed mode (only shown in Fixed mode; move/resize it in Edit controls)
 +        fixedStickCtl = new Ctl("fixedstick", "", "", KIND_STICK, 0, STYLE_PLAIN, 0.150f, 0.700f, 120);
 +        ctls.add(fixedStickCtl);
@@ -867,7 +869,10 @@ index 0000000..edccb74
 +                    && !lastQuest.isEmpty());
 +            questCtl.view.setVisibility(showQuest ? View.VISIBLE : View.GONE);
 +
-+            boolean showSongs = !editing && ((stateBits & ST_OCARINA) != 0);
++            boolean ocarinaOut = !editing && ((stateBits & ST_OCARINA) != 0);
++            if (!ocarinaOut && freePlay) setFreePlay(false);
++            notePad.setVisibility(ocarinaOut && freePlay ? View.VISIBLE : View.GONE);
++            boolean showSongs = ocarinaOut && !freePlay;
 +            if (showSongs) {
 +                String songs = act.nativeMmGetSongs();
 +                if (songs != null && !songs.equals(lastSongs)) {
@@ -919,6 +924,7 @@ index 0000000..edccb74
 +            for (Ctl c : ctls) c.view.setVisibility(View.GONE);
 +            tray.setVisibility(View.GONE);
 +            songsPanel.setVisibility(View.GONE);
++            notePad.setVisibility(View.GONE);
 +            pauseWrap.setVisibility(View.GONE);
 +            hudBar.setVisibility(View.GONE);
 +            infoBar.setVisibility(View.GONE);
@@ -989,6 +995,8 @@ index 0000000..edccb74
 +            case "map": return Ornate.ICON_MAP;
 +            case "more": return Ornate.ICON_DOTS;
 +            case "cup": return Ornate.ICON_FAIRY;
++            case "qsave": return Ornate.ICON_SAVE;
++            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
 +        }
 +    }
@@ -1122,12 +1130,73 @@ index 0000000..edccb74
 +        hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
 +        hint.setPadding(dp(6), dp(4), 0, 0);
 +        songsPanel.addView(hint);
++        LinearLayout songButtons = new LinearLayout(act);
++        songButtons.addView(editButton("\u266A Play ocarina", v -> setFreePlay(true)));
++        songButtons.addView(editButton("\u2715 Cancel", v -> tapN64(N64_B)));
++        songsPanel.addView(songButtons);
 +        songsPanel.setVisibility(View.GONE);
++        buildNotePad();
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT);
 +        lp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
 +        lp.rightMargin = dp(24);
 +        root.addView(songsPanel, lp);
++    }
++
++    // ---------------------------------------------------------------- free-play ocarina pad
++    private boolean freePlay = false;
++    private LinearLayout notePad;
++
++    private void setFreePlay(boolean on) {
++        freePlay = on;
++        if (!on) {
++            for (int m : new int[] { N64_A, N64_CUP, N64_CLEFT, N64_CDOWN, N64_CRIGHT }) act.nativeMmSetN64Button(m, false);
++        }
++    }
++
++    private void buildNotePad() {
++        notePad = new LinearLayout(act);
++        notePad.setOrientation(LinearLayout.VERTICAL);
++        notePad.setGravity(Gravity.CENTER_HORIZONTAL);
++        notePad.setPadding(dp(12), dp(8), dp(12), dp(10));
++        notePad.setBackground(panelDrawable());
++        LinearLayout notes = new LinearLayout(act);
++        notes.setGravity(Gravity.CENTER_VERTICAL);
++        int[] masks = { N64_A, N64_CDOWN, N64_CRIGHT, N64_CLEFT, N64_CUP };
++        String[] glyphs = { "A", "\u25BC", "\u25B6", "\u25C0", "\u25B2" };
++        for (int i = 0; i < masks.length; i++) {
++            final int mask = masks[i];
++            TextView n = hudText(24);
++            n.setText(glyphs[i]);
++            n.setGravity(Gravity.CENTER);
++            n.setTextColor(mask == N64_A ? Ornate.GOLD_LIGHT : Color.rgb(255, 226, 120));
++            n.setBackground(new Ornate.ButtonDrawable(STYLE_PLAIN, false,
++                    mask == N64_A ? Ornate.THEME_BLUE : Ornate.THEME_YELLOW));
++            n.setOnTouchListener((v, e) -> {
++                touched();
++                int a = e.getActionMasked();
++                if (a == MotionEvent.ACTION_DOWN) {
++                    v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                    act.nativeMmSetN64Button(mask, true);
++                } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
++                    act.nativeMmSetN64Button(mask, false);
++                }
++                return true;
++            });
++            LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(68), dp(68));
++            nlp.setMargins(dp(6), 0, dp(6), 0);
++            notes.addView(n, nlp);
++        }
++        notePad.addView(notes);
++        LinearLayout row = new LinearLayout(act);
++        row.addView(editButton("\u266B Song list", v -> setFreePlay(false)));
++        row.addView(editButton("\u2715 Put away", v -> tapN64(N64_B)));
++        notePad.addView(row);
++        notePad.setVisibility(View.GONE);
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
++        lp.bottomMargin = dp(16);
++        root.addView(notePad, lp);
 +    }
 +
 +    private void rebuildSongs(String songs) {
@@ -2468,10 +2537,10 @@ index 0000000..edccb74
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..62a1ce1
+index 0000000..03b27a8
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,488 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -2724,7 +2793,7 @@ index 0000000..62a1ce1
 +
 +    // ------------------------------------------------------------------ icons
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
-+            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9;
++            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -2767,6 +2836,8 @@ index 0000000..62a1ce1
 +                case ICON_DOTS: dots(c, s); break;
 +                case ICON_FAIRY: fairy(c, s); break;
 +                case ICON_HAND: hand(c, s); break;
++                case ICON_SAVE: save(c, s); break;
++                case ICON_LOAD: load(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -2848,6 +2919,42 @@ index 0000000..62a1ce1
 +            p.moveTo(s * 0.32f, s * 0.86f);
 +            p.quadTo(s * 0.52f, s * 0.92f, s * 0.7f, s * 0.85f);
 +            c.drawPath(p, stroke);
++        }
++
++        // Quick save: an arrow going down into a chest/tray
++        private void save(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.62f);
++            p.lineTo(s * 0.7f, s * 0.4f);
++            p.lineTo(s * 0.57f, s * 0.4f);
++            p.lineTo(s * 0.57f, s * 0.14f);
++            p.lineTo(s * 0.43f, s * 0.14f);
++            p.lineTo(s * 0.43f, s * 0.4f);
++            p.lineTo(s * 0.3f, s * 0.4f);
++            p.close();
++            c.drawPath(p, fill);
++            stroke.setStrokeWidth(s * 0.07f);
++            p.reset();
++            p.moveTo(s * 0.18f, s * 0.6f);
++            p.lineTo(s * 0.18f, s * 0.84f);
++            p.lineTo(s * 0.82f, s * 0.84f);
++            p.lineTo(s * 0.82f, s * 0.6f);
++            c.drawPath(p, stroke);
++        }
++
++        // Quick load: a circular "go back" arrow
++        private void load(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.08f);
++            RectF o = new RectF(s * 0.22f, s * 0.22f, s * 0.78f, s * 0.78f);
++            p.reset();
++            p.addArc(o, -60f, 290f);
++            c.drawPath(p, stroke);
++            p.reset();
++            p.moveTo(s * 0.62f, s * 0.12f);
++            p.lineTo(s * 0.8f, s * 0.3f);
++            p.lineTo(s * 0.56f, s * 0.36f);
++            p.close();
++            c.drawPath(p, fill);
 +        }
 +
 +        // An open hand: "interact"
@@ -4123,10 +4230,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..e2ac4bb
+index 0000000..3296fbd
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1148 @@
+@@ -0,0 +1,1147 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -4472,9 +4579,15 @@ index 0000000..e2ac4bb
 +    ShipInit::Init(CVAR_SPEED_MODE);
 +}
 +
++// Jump works in every form (the game's own ledge-jump uses this same animation for all of them),
++// except while Goron-rolling, Zora-swimming, Deku hopping/diving or being pulled by the hookshot.
++#define JUMP_BLOCKING_FLAGS3 (PLAYER_STATE3_FLYING_WITH_HOOKSHOT | PLAYER_STATE3_100 /* deku flower dive */ | \
++                              PLAYER_STATE3_1000 /* goron curled */ | PLAYER_STATE3_8000 /* zora swimming */ |   \
++                              PLAYER_STATE3_200000 /* deku hopping */)
++
 +static bool CanJump(Player* player) {
 +    if (player == nullptr || gPlayState == nullptr) return false;
-+    if ((player->transformation != PLAYER_FORM_HUMAN) && (player->transformation != PLAYER_FORM_FIERCE_DEITY)) return false;
++    if (player->stateFlags3 & JUMP_BLOCKING_FLAGS3) return false;
 +    if (!(player->actor.bgCheckFlags & BGCHECKFLAG_GROUND)) return false;
 +    if (player->stateFlags1 & (PLAYER_STATE1_TALKING | PLAYER_STATE1_DEAD | PLAYER_STATE1_CARRYING_ACTOR |
 +                               PLAYER_STATE1_2000 | PLAYER_STATE1_4000 | PLAYER_STATE1_100000 |
@@ -5056,14 +5169,7 @@ index 0000000..e2ac4bb
 +
 +    if (sSkipVisibleFrames >= 8 && !sSkipping) bits |= ST_CAN_SKIP;
 +    if (sSkipping) bits |= ST_SKIPPING;
-+    if (play->msgCtx.msgMode == MSGMODE_OCARINA_PLAYING) {
-+        for (s32 i = 0; i < SONG_COUNT; i++) {
-+            if (SongLearned(i)) {
-+                bits |= ST_OCARINA;
-+                break;
-+            }
-+        }
-+    }
++    if (play->msgCtx.msgMode == MSGMODE_OCARINA_PLAYING) bits |= ST_OCARINA; // ocarina out: song list / free play
 +    if ((gSaveContext.gameMode == GAMEMODE_NORMAL) && !IS_PAUSED(&play->pauseCtx) &&
 +        (play->msgCtx.msgMode == MSGMODE_NONE) && !InCutscene(play) && !Play_InCsMode(play)) {
 +        bits |= ST_SHOW_QUEST;
