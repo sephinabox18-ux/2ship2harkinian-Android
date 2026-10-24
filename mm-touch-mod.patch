@@ -139,10 +139,10 @@ index 0000000..b6c94da
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..fe4fe46
+index 0000000..5716099
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,229 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -253,8 +253,9 @@ index 0000000..fe4fe46
 +    @Override
 +    protected void onDraw(Canvas c) {
 +        float hs = heartSize();
-+        float step = hs * 2.15f;
-+        float x0 = dp(4) + hs;
++        float step = hs * 1.7f;            // hearts sit close together like the game's
++        float left = dp(4);                // shared left edge for every row
++        float x0 = left + hs * 0.75f;
 +        int maxHearts = maxHearts();
 +        int perRow = 10;
 +        int rows = (maxHearts + perRow - 1) / perRow;
@@ -289,35 +290,35 @@ index 0000000..fe4fe46
 +            c.drawPath(heart, heartEdge);
 +            if (fill > 0) c.drawCircle(cx - hs * 0.42f, cy - hs * 0.38f, hs * 0.16f, heartShine);
 +        }
-+        y += (rows - 1) * hs * 1.9f + hs * 1.25f;
++        y += (rows - 1) * hs * 1.9f + hs * 0.75f;
 +
 +        // Magic: gem cap on the left, gold frame, green fill sized to the meter
 +        if (hud[3] > 0) {
 +            float barH = dp(9);
-+            float gx = x0 - hs * 0.2f;
-+            float gs = barH * 0.95f;
-+            float left = gx + gs * 0.5f, len = dp(hud[3] * 1.05f);
-+            r.set(left, y, left + len, y + barH);
++            float gs = barH * 0.9f;
++            float gx = left + gs * 0.75f;
++            float bl = gx + gs * 0.3f, len = dp(hud[3] * 1.6f);
++            r.set(bl, y, bl + len, y + barH);
 +            c.drawRoundRect(r, barH / 2, barH / 2, frameFill);
 +            float frac = Math.max(0f, Math.min(1f, hud[2] / (float) hud[3]));
 +            if (frac > 0) {
-+                RectF f = new RectF(left + dp(1.5f), y + dp(1.5f), left + dp(1.5f) + (len - dp(3)) * frac, y + barH - dp(1.5f));
++                RectF f = new RectF(bl + dp(1.5f), y + dp(1.5f), bl + dp(1.5f) + (len - dp(3)) * frac, y + barH - dp(1.5f));
 +                magicFill.setShader(new LinearGradient(0, f.top, 0, f.bottom, Color.rgb(140, 240, 120), Color.rgb(30, 150, 50),
 +                        Shader.TileMode.CLAMP));
 +                c.drawRoundRect(f, barH / 2, barH / 2, magicFill);
 +            }
-+            frame.setShader(new LinearGradient(left, y, left, y + barH,
++            frame.setShader(new LinearGradient(bl, y, bl, y + barH,
 +                    new int[] { Ornate.GOLD_LIGHT, Ornate.GOLD_MID, Ornate.GOLD_DARK }, null, Shader.TileMode.CLAMP));
 +            c.drawRoundRect(r, barH / 2, barH / 2, frame);
 +            Ornate.drawGem(c, gx, y + barH / 2, gs, gem, gemEdge);
-+            y += barH + dp(6);
++            y += barH + dp(3);
 +        } else {
-+            y += dp(2);
++            y += dp(1);
 +        }
 +
 +        // Rupees + clock
 +        float ty = y + text.getTextSize() * 0.85f;
-+        float rx = x0 - hs * 0.4f;
++        float rx = left;
 +        float g = dp(5.5f);
 +        Path p = new Path();
 +        p.moveTo(rx + g, ty - g * 2.1f);
@@ -328,12 +329,12 @@ index 0000000..fe4fe46
 +        rupee.setShader(new LinearGradient(rx, ty - g * 2, rx + 2 * g, ty, Color.rgb(140, 245, 150), Color.rgb(20, 140, 60),
 +                Shader.TileMode.CLAMP));
 +        c.drawPath(p, rupee);
-+        float tx = rx + 2 * g + dp(5);
++        float tx = rx + 2 * g + dp(4);
 +        boolean full = hud[4] >= hud[5] && hud[5] > 0;
 +        text.setColor(full ? Color.rgb(140, 240, 140) : Ornate.CREAM);
 +        String rupees = String.valueOf(hud[4]);
 +        c.drawText(rupees, tx, ty, text);
-+        tx += text.measureText(rupees) + dp(14);
++        tx += text.measureText(rupees) + dp(10);
 +
 +        int minutes = hud[7] * 24 * 60 / 65536;
 +        int hr = minutes / 60, mn = minutes % 60;
@@ -349,9 +350,9 @@ index 0000000..fe4fe46
 +    /** Width the HUD needs for the current values. */
 +    public int preferredWidth() {
 +        float hs = heartSize();
-+        float hearts = dp(4) + hs + (Math.min(maxHearts(), 10) - 1) * hs * 2.15f + hs + dp(6);
-+        float magic = hud[3] > 0 ? (dp(4) + dp(hud[3] * 1.05f) + dp(12)) : 0;
-+        float line = dp(4) + dp(16) + text.measureText("9999") + dp(14) + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(8);
++        float hearts = dp(4) + hs * 0.75f + (Math.min(maxHearts(), 10) - 1) * hs * 1.7f + hs * 0.8f + dp(4);
++        float magic = hud[3] > 0 ? (dp(4) + dp(9) + dp(hud[3] * 1.6f) + dp(6)) : 0;
++        float line = dp(4) + dp(15) + text.measureText("9999") + dp(10) + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(6);
 +        return (int) Math.max(hearts, Math.max(magic, line));
 +    }
 +
@@ -359,9 +360,9 @@ index 0000000..fe4fe46
 +    public int preferredHeight() {
 +        float hs = heartSize();
 +        int rows = (maxHearts() + 9) / 10;
-+        float h = dp(4) + hs * 0.95f + (rows - 1) * hs * 1.9f + hs * 1.25f;
-+        h += hud[3] > 0 ? dp(9) + dp(6) : dp(2);
-+        h += text.getTextSize() * 1.3f + dp(4);
++        float h = dp(4) + hs * 0.95f + (rows - 1) * hs * 1.9f + hs * 0.75f;
++        h += hud[3] > 0 ? dp(9) + dp(3) : dp(1);
++        h += text.getTextSize() * 1.15f + dp(4);
 +        return (int) h;
 +    }
 +
@@ -429,10 +430,10 @@ index fe546c8..638daaa 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..da2805d
+index 0000000..dde4924
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,1902 @@
+@@ -0,0 +1,1960 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -642,6 +643,7 @@ index 0000000..da2805d
 +        final float defX, defY, defSize;
 +        float x, y, size;
 +        boolean hidden, defHidden;
++        int theme = Ornate.THEME_DEFAULT; // colour picked in Edit controls
 +        View view;
 +        TextView text;
 +        ImageView icon;
@@ -935,9 +937,28 @@ index 0000000..da2805d
 +        return new Ornate.ButtonDrawable(style, active);
 +    }
 +
++    private Drawable styleFor(Ctl c, boolean active) {
++        return new Ornate.ButtonDrawable(c.style, active, c.theme);
++    }
++
++    private static boolean colourable(Ctl c) {
++        return c.kind == KIND_N64 || c.kind == KIND_ACTION || c.kind == KIND_TRAY;
++    }
++
++    private void setTheme(int theme) {
++        touched();
++        if (selectedCtl == null || !colourable(selectedCtl)) {
++            showToast("Tap a button first");
++            return;
++        }
++        selectedCtl.theme = theme;
++        selectedCtl.view.setBackground(styleFor(selectedCtl, selectedCtl == sprintCtl && sprintUiOn));
++    }
++
 +    // Which drawn icon a control shows instead of a text label
 +    private int iconFor(Ctl c) {
 +        switch (c.id) {
++            case "a": return Ornate.ICON_HAND;
 +            case "attack": return Ornate.ICON_SWORD;
 +            case "shield": return Ornate.ICON_SHIELD;
 +            case "sprint": return Ornate.ICON_RUN;
@@ -975,7 +996,7 @@ index 0000000..da2805d
 +            bg.setCornerRadius(dp(40));
 +            v.setBackground(bg);
 +        } else {
-+            v.setBackground(styleFor(c.style, false));
++            v.setBackground(styleFor(c, false));
 +        }
 +        if (c.kind == KIND_STICK) v.setBackground(new Ornate.StickBaseDrawable());
 +        if (c.kind == KIND_MINIMAP) {
@@ -1775,39 +1796,71 @@ index 0000000..da2805d
 +
 +    private void buildEditBar() {
 +        editBar = new LinearLayout(act);
-+        editBar.setOrientation(LinearLayout.HORIZONTAL);
++        editBar.setOrientation(LinearLayout.VERTICAL);
++        LinearLayout row1 = new LinearLayout(act);
++        LinearLayout row2 = new LinearLayout(act);
++        row2.setGravity(Gravity.CENTER_VERTICAL);
 +        editBar.setPadding(dp(8), dp(6), dp(8), dp(6));
 +        editBar.setBackground(panelDrawable());
 +        editBar.setVisibility(View.GONE);
 +
-+        editBar.addView(editButton("Done", v -> setEditing(false)));
-+        editBar.addView(editButton("Size \u2212", v -> resizeSelected(1f / 1.1f)));
-+        editBar.addView(editButton("Size +", v -> resizeSelected(1.1f)));
-+        editBar.addView(editButton("Hide/Show", v -> {
++        row1.addView(editButton("Done", v -> setEditing(false)));
++        row1.addView(editButton("Size \u2212", v -> resizeSelected(1f / 1.1f)));
++        row1.addView(editButton("Size +", v -> resizeSelected(1.1f)));
++        row1.addView(editButton("Hide/Show", v -> {
 +            if (selectedCtl != null) {
 +                selectedCtl.hidden = !selectedCtl.hidden;
 +                layoutAll();
 +                if (selectedCtl.kind == KIND_MINIMAP) pushMinimap();
 +            }
 +        }));
-+        editBar.addView(editButton("See-through \u2212", v -> setOpacity(opacity - 0.1f)));
++        row1.addView(editButton("See-through \u2212", v -> setOpacity(opacity - 0.1f)));
 +        opacityLabel = editButton("", null);
-+        editBar.addView(opacityLabel);
-+        editBar.addView(editButton("See-through +", v -> setOpacity(opacity + 0.1f)));
-+        editBar.addView(editButton("Reset layout", v -> resetLayout()));
++        row1.addView(opacityLabel);
++        row1.addView(editButton("See-through +", v -> setOpacity(opacity + 0.1f)));
++        row1.addView(editButton("Reset layout", v -> resetLayout()));
++
++        row2.addView(editButton("Colour:", null));
++        row2.addView(swatch(Ornate.THEME_GREEN, "Green"));
++        row2.addView(swatch(Ornate.THEME_BLUE, "Blue"));
++        row2.addView(swatch(Ornate.THEME_YELLOW, "Yellow"));
++        row2.addView(swatch(Ornate.THEME_RED, "Red"));
++        row2.addView(editButton("Default", v -> setTheme(Ornate.THEME_DEFAULT)));
 +
 +        TextView help = new TextView(act);
 +        help.setText("Tap a control to pick it, drag to move it");
 +        help.setTextColor(Color.argb(200, 255, 255, 255));
 +        help.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 +        help.setPadding(dp(10), dp(9), dp(6), dp(9));
-+        editBar.addView(help);
++        row2.addView(help);
++        editBar.addView(row1);
++        editBar.addView(row2);
 +
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
 +        lp.gravity = Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL;
 +        lp.bottomMargin = dp(14);
 +        root.addView(editBar, lp);
 +        updateOpacityLabel();
++    }
++
++    private View swatch(int theme, String name) {
++        TextView sw = new TextView(act);
++        sw.setText(name);
++        sw.setTextColor(Color.WHITE);
++        sw.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
++        sw.setTypeface(Typeface.DEFAULT_BOLD);
++        sw.setGravity(Gravity.CENTER);
++        GradientDrawable d = new GradientDrawable();
++        d.setColor(Ornate.swatchColor(theme));
++        d.setCornerRadius(dp(14));
++        d.setStroke(dp(2), Ornate.GOLD_MID);
++        sw.setBackground(d);
++        sw.setPadding(dp(12), dp(6), dp(12), dp(6));
++        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.setMargins(dp(4), dp(2), dp(4), dp(2));
++        sw.setLayoutParams(lp);
++        sw.setOnClickListener(v -> setTheme(theme));
++        return sw;
 +    }
 +
 +    private TextView editButton(String label, View.OnClickListener onClick) {
@@ -1901,6 +1954,7 @@ index 0000000..da2805d
 +    private void loadCtl(Ctl c) {
 +        String s = prefs.getString("ctl_" + c.id, null);
 +        c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = c.defHidden;
++        c.theme = prefs.getInt("theme_" + c.id, Ornate.THEME_DEFAULT);
 +        if (s == null) return;
 +        try {
 +            String[] p = s.split(",");
@@ -1916,6 +1970,7 @@ index 0000000..da2805d
 +        SharedPreferences.Editor e = prefs.edit();
 +        for (Ctl c : ctls) {
 +            e.putString("ctl_" + c.id, c.x + "," + c.y + "," + c.size + "," + (c.hidden ? "1" : "0"));
++            e.putInt("theme_" + c.id, c.theme);
 +        }
 +        e.putFloat("opacity", opacity);
 +        e.apply();
@@ -1924,6 +1979,10 @@ index 0000000..da2805d
 +    private void resetLayout() {
 +        for (Ctl c : ctls) {
 +            c.x = c.defX; c.y = c.defY; c.size = c.defSize; c.hidden = c.defHidden;
++            if (c.theme != Ornate.THEME_DEFAULT && colourable(c)) {
++                c.theme = Ornate.THEME_DEFAULT;
++                c.view.setBackground(styleFor(c, false));
++            }
 +        }
 +        layoutAll();
 +    }
@@ -1982,7 +2041,7 @@ index 0000000..da2805d
 +    private void setSprintUi(boolean on) {
 +        if (on == sprintUiOn || sprintCtl.view == null) return;
 +        sprintUiOn = on;
-+        sprintCtl.view.setBackground(styleFor(STYLE_PLAIN, on));
++        sprintCtl.view.setBackground(styleFor(sprintCtl, on));
 +    }
 +
 +    private boolean onCtlTouch(Ctl c, MotionEvent e) {
@@ -2337,10 +2396,10 @@ index 0000000..da2805d
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..acc36ee
+index 0000000..62a1ce1
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,450 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -2373,14 +2432,28 @@ index 0000000..acc36ee
 +    static final int GEM_LIGHT = Color.rgb(120, 230, 150);
 +    static final int GEM_DARK = Color.rgb(20, 120, 60);
 +
-+    // Fill colours per style: { centre, edge }
-+    static int[] fillFor(int style, boolean active) {
++    // Colour themes a button can use (chosen per button in Edit controls)
++    static final int THEME_DEFAULT = -1, THEME_GREEN = 0, THEME_BLUE = 1, THEME_YELLOW = 2, THEME_RED = 3;
++
++    // Fill colours: { centre, edge }
++    static int[] fillFor(int style, boolean active, int theme) {
 +        if (active) return new int[] { Color.rgb(176, 132, 52), Color.rgb(96, 64, 20) };
-+        switch (style) {
-+            case ModTouchOverlay.STYLE_A: return new int[] { Color.rgb(64, 118, 150), Color.rgb(18, 46, 70) };
-+            case ModTouchOverlay.STYLE_START: return new int[] { Color.rgb(150, 58, 50), Color.rgb(64, 18, 16) };
++        if (theme == THEME_DEFAULT) {
++            if (style == ModTouchOverlay.STYLE_A) theme = THEME_BLUE;
++            else if (style == ModTouchOverlay.STYLE_START) theme = THEME_RED;
++            else theme = THEME_GREEN;
++        }
++        switch (theme) {
++            case THEME_BLUE: return new int[] { Color.rgb(64, 118, 150), Color.rgb(18, 46, 70) };
++            case THEME_YELLOW: return new int[] { Color.rgb(196, 156, 56), Color.rgb(92, 64, 14) };
++            case THEME_RED: return new int[] { Color.rgb(150, 58, 50), Color.rgb(64, 18, 16) };
 +            default: return new int[] { Color.rgb(62, 128, 98), Color.rgb(14, 52, 40) };
 +        }
++    }
++
++    static int swatchColor(int theme) {
++        int[] f = fillFor(ModTouchOverlay.STYLE_PLAIN, false, theme);
++        return f[0];
 +    }
 +
 +    static void drawGem(Canvas c, float cx, float cy, float s, Paint fill, Paint edge) {
@@ -2399,6 +2472,7 @@ index 0000000..acc36ee
 +    static final class ButtonDrawable extends Drawable {
 +        private final int style;
 +        private final boolean active;
++        private final int theme;
 +        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
 +        private final Paint inner = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -2409,8 +2483,13 @@ index 0000000..acc36ee
 +        private final RectF oval = new RectF();
 +
 +        ButtonDrawable(int style, boolean active) {
++            this(style, active, THEME_DEFAULT);
++        }
++
++        ButtonDrawable(int style, boolean active, int theme) {
 +            this.style = style;
 +            this.active = active;
++            this.theme = theme;
 +            ring.setStyle(Paint.Style.STROKE);
 +            inner.setStyle(Paint.Style.STROKE);
 +            gemEdge.setStyle(Paint.Style.STROKE);
@@ -2425,7 +2504,7 @@ index 0000000..acc36ee
 +            float ringW = r * 0.13f;
 +            float rr = r - ringW / 2f - 1;
 +
-+            int[] f = fillFor(style, active);
++            int[] f = fillFor(style, active, theme);
 +            fill.setShader(new RadialGradient(cx, cy - rr * 0.35f, rr * 1.25f, f[0], f[1], Shader.TileMode.CLAMP));
 +            fill.setAlpha((int) (alpha * 0.82f));
 +            c.drawCircle(cx, cy, rr, fill);
@@ -2573,7 +2652,7 @@ index 0000000..acc36ee
 +
 +    // ------------------------------------------------------------------ icons
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
-+            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8;
++            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -2615,6 +2694,7 @@ index 0000000..acc36ee
 +                case ICON_MAP: map(c, s); break;
 +                case ICON_DOTS: dots(c, s); break;
 +                case ICON_FAIRY: fairy(c, s); break;
++                case ICON_HAND: hand(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -2671,21 +2751,50 @@ index 0000000..acc36ee
 +            c.drawPath(p, stroke);
 +        }
 +
++        // A boot with motion lines swooshing underneath it
 +        private void jump(Canvas c, float s) {
 +            p.reset();
-+            p.moveTo(s * 0.5f, s * 0.14f);
-+            p.lineTo(s * 0.7f, s * 0.38f);
-+            p.lineTo(s * 0.57f, s * 0.38f);
-+            p.lineTo(s * 0.57f, s * 0.66f);
-+            p.lineTo(s * 0.43f, s * 0.66f);
-+            p.lineTo(s * 0.43f, s * 0.38f);
-+            p.lineTo(s * 0.3f, s * 0.38f);
++            p.moveTo(s * 0.36f, s * 0.12f);          // top of the shaft
++            p.lineTo(s * 0.58f, s * 0.12f);
++            p.lineTo(s * 0.58f, s * 0.44f);
++            p.quadTo(s * 0.62f, s * 0.48f, s * 0.74f, s * 0.5f);   // instep
++            p.quadTo(s * 0.86f, s * 0.53f, s * 0.84f, s * 0.62f);  // toe
++            p.lineTo(s * 0.34f, s * 0.62f);          // sole
++            p.quadTo(s * 0.3f, s * 0.62f, s * 0.31f, s * 0.54f);   // heel
 +            p.close();
 +            c.drawPath(p, fill);
++            accent.setStrokeWidth(s * 0.03f);
 +            p.reset();
-+            p.moveTo(s * 0.26f, s * 0.82f);
-+            p.lineTo(s * 0.74f, s * 0.82f);
++            p.moveTo(s * 0.36f, s * 0.2f);           // boot cuff
++            p.lineTo(s * 0.58f, s * 0.2f);
++            c.drawPath(p, accent);
++            // whoosh
++            stroke.setStrokeWidth(s * 0.055f);
++            p.reset();
++            p.moveTo(s * 0.24f, s * 0.74f);
++            p.quadTo(s * 0.5f, s * 0.82f, s * 0.8f, s * 0.72f);
++            p.moveTo(s * 0.32f, s * 0.86f);
++            p.quadTo(s * 0.52f, s * 0.92f, s * 0.7f, s * 0.85f);
 +            c.drawPath(p, stroke);
++        }
++
++        // An open hand: "interact"
++        private void hand(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.1f);
++            p.reset();
++            p.moveTo(s * 0.37f, s * 0.5f);
++            p.lineTo(s * 0.37f, s * 0.22f);
++            p.moveTo(s * 0.48f, s * 0.48f);
++            p.lineTo(s * 0.48f, s * 0.15f);
++            p.moveTo(s * 0.59f, s * 0.48f);
++            p.lineTo(s * 0.59f, s * 0.17f);
++            p.moveTo(s * 0.7f, s * 0.52f);
++            p.lineTo(s * 0.7f, s * 0.27f);
++            p.moveTo(s * 0.32f, s * 0.64f);           // thumb
++            p.lineTo(s * 0.2f, s * 0.48f);
++            c.drawPath(p, stroke);
++            RectF palm = new RectF(s * 0.31f, s * 0.42f, s * 0.76f, s * 0.84f);
++            c.drawRoundRect(palm, s * 0.14f, s * 0.14f, fill);
 +        }
 +
 +        private void target(Canvas c, float s) {
