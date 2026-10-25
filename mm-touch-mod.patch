@@ -895,10 +895,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..7892de2
+index 0000000..9073297
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2582 @@
+@@ -0,0 +1,2619 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1130,6 +1130,7 @@ index 0000000..7892de2
 +        TextView ammo;
 +        View iconView;
 +        boolean latchedPress;
++        int pressedMask; // what was actually pressed (may be swapped while aiming)
 +        int shownItem = -2;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
@@ -1681,7 +1682,13 @@ index 0000000..7892de2
 +    private void attachDpadCtl(Ctl c) {
 +        dpad = new DpadView(act, new DpadView.Host() {
 +            @Override public Bitmap icon(int item) { return iconFor(item); }
-+            @Override public void press(int mask, boolean down) { touched(); act.nativeMmSetN64Button(mask, down); }
++            private int sent = 0;
++            @Override public void press(int mask, boolean down) {
++                touched();
++                if (down) sent = aimSwap(mask);
++                act.nativeMmSetN64Button(down ? sent : (sent != 0 ? sent : mask), down);
++                if (!down) sent = 0;
++            }
 +            @Override public boolean editing() { return editing; }
 +            @Override public boolean onEditTouch(MotionEvent e) { return onCtlEdit(c, e); }
 +        });
@@ -1822,6 +1829,29 @@ index 0000000..7892de2
 +    }
 +
 +    private int lastAction = -99;
++    private int heldItemMask = 0; // button of the item in Link's hand (for aiming swaps)
++
++    private static int heldButtonMask(int held) {
++        switch (held) {
++            case 1: return N64_CLEFT;
++            case 2: return N64_CDOWN;
++            case 3: return N64_CRIGHT;
++            case 5: return DpadView.N64_DRIGHT;
++            case 6: return DpadView.N64_DLEFT;
++            case 7: return DpadView.N64_DDOWN;
++            case 8: return DpadView.N64_DUP;
++            default: return 0;
++        }
++    }
++
++    // While aiming in first person (bow, hookshot...), B fires / uses the item and the item's own
++    // button puts it away: the two swap places.
++    private int aimSwap(int mask) {
++        if ((stateBits & ST_AIMING) == 0 || heldItemMask == 0) return mask;
++        if (mask == N64_B) return heldItemMask;
++        if (mask == heldItemMask) return N64_B;
++        return mask;
++    }
 +    private String aLabel = null;
 +
 +    // Size a word so it fits on one line well inside a round button of the given diameter
@@ -1841,6 +1871,7 @@ index 0000000..7892de2
 +    private void updateActionAndForm() {
 +        int[] a = act.nativeMmGetAction();
 +        if (a == null || a.length < 2) return;
++        heldItemMask = a.length >= 3 ? heldButtonMask(a[2]) : 0;
 +        if (a[1] != form) {
 +            form = a[1];
 +            releaseSpecial();
@@ -3058,6 +3089,9 @@ index 0000000..7892de2
 +        for (Ctl c : ctls) {
 +            if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
 +        }
++        for (int m : new int[] { DpadView.N64_DUP, DpadView.N64_DDOWN, DpadView.N64_DLEFT, DpadView.N64_DRIGHT }) {
++            act.nativeMmSetN64Button(m, false);
++        }
 +        act.setAxis(ControllerButtons.AXIS_LX, (short) 0);
 +        act.setAxis(ControllerButtons.AXIS_LY, (short) 0);
 +        act.setAxis(ControllerButtons.AXIS_RX, (short) 0);
@@ -3103,7 +3137,10 @@ index 0000000..7892de2
 +                switch (c.kind) {
 +                    case KIND_WHEEL: openWheel(); break;
 +                    case KIND_POUND: startPound(); break;
-+                    case KIND_N64: act.nativeMmSetN64Button(c.value, true); break;
++                    case KIND_N64:
++                        c.pressedMask = aimSwap(c.value);
++                        act.nativeMmSetN64Button(c.pressedMask, true);
++                        break;
 +                    case KIND_ACTION:
 +                    case KIND_SKIP: act.nativeMmAction(c.value); break;
 +                    case KIND_TRAY: tray.setVisibility(tray.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE); break;
@@ -3117,7 +3154,7 @@ index 0000000..7892de2
 +                    refreshLatchGlow();
 +                    return true; // a toggle: nothing to release
 +                }
-+                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
++                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.pressedMask != 0 ? c.pressedMask : c.value, false);
 +                if (c.kind == KIND_POUND) stopPound();
 +                return true;
 +        }
@@ -5666,10 +5703,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..6387963
+index 0000000..6b818b0
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1661 @@
+@@ -0,0 +1,1664 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -6521,6 +6558,7 @@ index 0000000..6387963
 +static std::atomic<int> sMarker[5];  // valid, x*1000, y*1000 (screen -1..1, y up), distance, behind camera
 +static std::atomic<int> sAAction{ -1 };
 +static std::atomic<int> sForm{ 0 };
++static std::atomic<int> sHeldItemButton{ -1 };
 +
 +static void UpdateMarker(PlayState* play) {
 +    Vec3f target, proj;
@@ -7060,6 +7098,7 @@ index 0000000..6387963
 +    {
 +        Player* player = GET_PLAYER(play);
 +        if (player != nullptr) sForm = player->transformation;
++        sHeldItemButton = (player != nullptr) ? player->heldItemButton : -1;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_100000)) bits |= ST_AIMING;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_8000000)) bits |= ST_SWIMMING;
 +        if (InConversation(play)) bits |= ST_TEXT;
@@ -7210,11 +7249,12 @@ index 0000000..6387963
 +    return arr;
 +}
 +
-+// { A button action (DO_ACTION_*), current form (PLAYER_FORM_*) }
++// { A button action (DO_ACTION_*), current form (PLAYER_FORM_*), button of the item in hand
++//   (1-3 = C left/down/right, 5-8 = D-pad right/left/down/up, else none) }
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetAction(JNIEnv* env, jobject) {
-+    jint vals[2] = { sAAction.load(), sForm.load() };
-+    jintArray arr = env->NewIntArray(2);
-+    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 2, vals);
++    jint vals[3] = { sAAction.load(), sForm.load(), sHeldItemButton.load() };
++    jintArray arr = env->NewIntArray(3);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 3, vals);
 +    return arr;
 +}
 +
@@ -7409,7 +7449,7 @@ index fa46547..92a08eb 100644
          if (CHECK_EVENTINF(EVENTINF_TRIGGER_DAYTELOP)) {
              CLEAR_EVENTINF(EVENTINF_TRIGGER_DAYTELOP);
 diff --git a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
-index 978a56f..49b92db 100644
+index 978a56f..cd3ea62 100644
 --- a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
 +++ b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
 @@ -20,6 +20,8 @@ void EnGe2_Walk(EnGe2* this, PlayState* play);
@@ -7421,38 +7461,75 @@ index 978a56f..49b92db 100644
  
  ActorProfile En_Ge2_Profile = {
      /**/ ACTOR_EN_GE2,
-@@ -366,9 +368,30 @@ void EnGe2_Scream(EnGe2* this) {
+@@ -366,6 +368,67 @@ void EnGe2_Scream(EnGe2* this) {
  /**
   * Wait for timer to finish, then set up the captured/thrown out transition.
   */
-+// Majora's Mask touch mod: instead of throwing Link out, the guard strikes him (half a heart and a
-+// knockback), then goes back to her rounds and won't spot him again for a few seconds.
-+static void EnGe2_StrikePlayer(EnGe2* this, PlayState* play) {
-+    if (play->msgCtx.msgMode != MSGMODE_NONE) {
-+        Message_CloseTextbox(play);
++void EnGe2_Stunned(EnGe2* this, PlayState* play);
++void EnGe2_KnockedOut(EnGe2* this, PlayState* play);
++
++// Majora's Mask touch mod: optional stealth. A patrolling guard who spots Link shouts and comes at him
++// like a normal enemy: she runs up and strikes (half a heart, no fling) until she's knocked out, stunned
++// with a Deku Nut, or Link gets well away. Guards on the boats still throw him out.
++static void EnGe2_MMFight(EnGe2* this, PlayState* play) {
++    Actor* actor = &this->picto.actor;
++
++    SkelAnime_Update(&this->skelAnime);
++    Math_SmoothStepToS(&actor->shape.rot.y, actor->yawTowardsPlayer, 2, 0x800, 0x100);
++    actor->world.rot.y = actor->shape.rot.y;
++    if (this->timer > 0) {
++        this->timer--;
 +    }
-+    Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_END);
-+    func_800B8D50(play, &this->picto.actor, 9.0f, this->picto.actor.yawTowardsPlayer, 6.0f, 8);
-+    EnGe2_Scream(this);
-+    CLEAR_WEEKEVENTREG(WEEKEVENTREG_80_08);
-+    this->stateFlags &= ~GERUDO_PURPLE_STATE_CAPTURING;
-+    this->mmCooldown = 200; // ~10 seconds
-+    if (this->mmWasStationary) {
-+        this->actionFunc = EnGe2_GuardStationary;
-+    } else {
++
++    if ((actor->xzDistToPlayer > 800.0f) || (fabsf(actor->playerHeightRel) > 250.0f)) {
++        actor->speed = 0.0f; // lost him: back to her rounds for a while
++        this->mmCooldown = 120;
 +        EnGe2_SetupLookAround(this);
++        return;
++    }
++
++    if (actor->xzDistToPlayer > 50.0f) {
++        actor->speed = 5.0f;
++        if (!(actor->bgCheckFlags & BGCHECKFLAG_GROUND)) {
++            actor->world.pos = actor->prevPos; // don't run off ledges
++        }
++    } else {
++        actor->speed = 0.0f;
++        if (this->timer == 0) {
++            Actor_PlaySfx(actor, NA_SE_EN_PIRATE_ATTACK);
++            func_800B8D10(play, actor, 1.0f, actor->yawTowardsPlayer, 0.0f, 1, 8); // a hit, half a heart
++            this->timer = 30;
++        }
++    }
++
++    // Hittable like any enemy (same reactions as when she's patrolling)
++    if (this->collider.base.acFlags & AC_HIT) {
++        this->collider.base.acFlags &= ~AC_HIT;
++        if ((this->collider.elem.acHitElem != NULL) &&
++            (this->collider.elem.acHitElem->atDmgInfo.dmgFlags & DMG_DEKU_NUT)) {
++            Actor_SetColorFilter(actor, COLORFILTER_COLORFLAG_BLUE, 120, COLORFILTER_BUFFLAG_OPA, 400);
++            actor->speed = 0.0f;
++            this->actionFunc = EnGe2_Stunned;
++            this->stateFlags |= GERUDO_PURPLE_STATE_STUNNED;
++        } else {
++            Animation_Change(&this->skelAnime, &gGerudoPurpleFallingToGroundAnim, 1.0f, 0.0f,
++                             Animation_GetLastFrame(&gGerudoPurpleFallingToGroundAnim), ANIMMODE_ONCE, -8.0f);
++            this->timer = 200;
++            actor->speed = 0.0f;
++            this->actionFunc = EnGe2_KnockedOut;
++            Actor_PlaySfx(actor, NA_SE_EN_PIRATE_DEAD);
++            actor->flags &= ~ACTOR_FLAG_ATTENTION_ENABLED;
++            this->stateFlags |= GERUDO_PURPLE_STATE_KO;
++        }
++    } else {
++        CollisionCheck_SetAC(play, &play->colChkCtx, &this->collider.base);
 +    }
 +}
 +
  void EnGe2_ThrowPlayerOut(EnGe2* this, PlayState* play) {
      if (this->timer > 0) {
          this->timer--;
-+    } else if (MMMod_OptionalStealth()) {
-+        EnGe2_StrikePlayer(this, play);
-     } else if (play->nextEntrance != play->setupExitList[GERUDO_PURPLE_GET_EXIT(&this->picto.actor)]) {
-         play->nextEntrance = play->setupExitList[GERUDO_PURPLE_GET_EXIT(&this->picto.actor)];
-         play->transitionTrigger = TRANS_TRIGGER_START;
-@@ -488,7 +511,8 @@ void EnGe2_PatrolDuties(EnGe2* this, PlayState* play) {
+@@ -488,9 +551,17 @@ void EnGe2_PatrolDuties(EnGe2* this, PlayState* play) {
          this->actionFunc = EnGe2_TurnToPlayerFast;
          Animation_Change(&this->skelAnime, &gGerudoPurpleLookingAboutAnim, 1.0f, 0.0f,
                           Animation_GetLastFrame(&gGerudoPurpleLookingAboutAnim), ANIMMODE_LOOP, -8.0f);
@@ -7460,9 +7537,19 @@ index 978a56f..49b92db 100644
 +    } else if ((this->mmCooldown == 0) &&
 +               EnGe2_LookForPlayer(play, &this->picto.actor, &this->picto.actor.focus.pos,
                                     this->picto.actor.shape.rot.y, 0x1800, visionRange, this->verticalDetectRange)) {
-         if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
+-        if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
++        if (MMMod_OptionalStealth() && !Play_InCsMode(play)) {
++            Lib_PlaySfx(NA_SE_SY_FOUND);
++            EnGe2_Scream(this);
++            Animation_Change(&this->skelAnime, &gGerudoPurpleChargingAnim, 1.0f, 0.0f,
++                             Animation_GetLastFrame(&gGerudoPurpleChargingAnim), ANIMMODE_LOOP, -8.0f);
++            this->timer = 15;
++            this->actionFunc = EnGe2_MMFight;
++        } else if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
              this->picto.actor.speed = 0.0f;
-@@ -677,7 +701,9 @@ void EnGe2_PerformCutsceneActions(EnGe2* this, PlayState* play) {
+             Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_26);
+             Lib_PlaySfx(NA_SE_SY_FOUND);
+@@ -677,7 +748,9 @@ void EnGe2_PerformCutsceneActions(EnGe2* this, PlayState* play) {
  // Used for those on boats
  void EnGe2_GuardStationary(EnGe2* this, PlayState* play) {
      SkelAnime_Update(&this->skelAnime);
@@ -7473,7 +7560,7 @@ index 978a56f..49b92db 100644
                              0x4000, 720.0f, this->verticalDetectRange)) {
          if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
              Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_26);
-@@ -699,6 +725,10 @@ void EnGe2_Update(Actor* thisx, PlayState* play) {
+@@ -699,6 +772,10 @@ void EnGe2_Update(Actor* thisx, PlayState* play) {
      s32 pad;
      EnGe2* this = (EnGe2*)thisx;
  
@@ -7500,7 +7587,7 @@ index ee0d99d..a03fec7 100644
  
  #endif // Z_EN_GE2_H
 diff --git a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
-index 7079b26..ed8334d 100644
+index 7079b26..9efba3c 100644
 --- a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
 +++ b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
 @@ -198,12 +198,25 @@ void EnGe3_Idle(EnGe3* this, PlayState* play) {
@@ -7521,7 +7608,7 @@ index 7079b26..ed8334d 100644
 +            Message_CloseTextbox(play);
 +        }
 +        Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_END);
-+        func_800B8D50(play, &this->picto.actor, 9.0f, this->picto.actor.yawTowardsPlayer, 6.0f, 8);
++        func_800B8D10(play, &this->picto.actor, 1.0f, this->picto.actor.yawTowardsPlayer, 0.0f, 1, 8);
 +        EnGe3_Scream(this);
 +        CLEAR_WEEKEVENTREG(WEEKEVENTREG_80_08);
 +        this->mmNoDetect = true;
@@ -7554,7 +7641,7 @@ index f2611e4..b3f5e9a 100644
  
  #endif // Z_EN_GE3_H
 diff --git a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
-index 1cedd03..7d9f63d 100644
+index 1cedd03..60c11d4 100644
 --- a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
 +++ b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
 @@ -302,9 +302,23 @@ void EnLookNuts_SetupSendPlayerToSpawn(EnLookNuts* this) {
@@ -7570,7 +7657,7 @@ index 1cedd03..7d9f63d 100644
 +        // Majora's Mask touch mod: a hit and a knockback instead of being sent back to the entrance
 +        Message_CloseTextbox(play);
 +        Player_SetCsActionWithHaltedActors(play, &this->actor, PLAYER_CSACTION_END);
-+        func_800B8D50(play, &this->actor, 8.0f, this->actor.yawTowardsPlayer, 5.0f, 8);
++        func_800B8D10(play, &this->actor, 1.0f, this->actor.yawTowardsPlayer, 0.0f, 1, 8);
 +        D_80A6862C = false;
 +        this->isPlayerDetected = false;
 +        this->mmCooldown = 200;
