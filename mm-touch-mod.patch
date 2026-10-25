@@ -895,10 +895,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..9073297
+index 0000000..4197a98
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2619 @@
+@@ -0,0 +1,2629 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1167,6 +1167,7 @@ index 0000000..9073297
 +        optionalStealth = prefs.getBoolean("optionalStealth", true);
 +        treeChop = prefs.getBoolean("treeChop", true);
 +        smoothSteer = prefs.getBoolean("smoothSteer", true);
++        ruinedTermina = prefs.getBoolean("ruinedTermina", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -1276,6 +1277,7 @@ index 0000000..9073297
 +        act.nativeMmSetOption(7, swimInvert ? 1 : 0);
 +        act.nativeMmSetOption(8, treeChop ? 1 : 0);
 +        act.nativeMmSetOption(9, smoothSteer ? 1 : 0);
++        act.nativeMmSetOption(10, ruinedTermina ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -2532,6 +2534,12 @@ index 0000000..9073297
 +            act.nativeMmSetOption(6, optionalStealth ? 1 : 0);
 +            refreshSettings();
 +        });
++        ruinedLabel = settingsRow(settingsPanel, "If the moon falls", null, null, "Change", () -> {
++            ruinedTermina = !ruinedTermina;
++            prefs.edit().putBoolean("ruinedTermina", ruinedTermina).apply();
++            act.nativeMmSetOption(10, ruinedTermina ? 1 : 0);
++            refreshSettings();
++        });
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
 +            treeChop = !treeChop;
 +            prefs.edit().putBoolean("treeChop", treeChop).apply();
@@ -2641,6 +2649,7 @@ index 0000000..9073297
 +        steerLabel.setText(smoothSteer ? "Smooth" : "Original");
 +        stealthLabel.setText(optionalStealth ? "Fight back" : "Thrown out");
 +        treeLabel.setText(treeChop ? "On" : "Off");
++        ruinedLabel.setText(ruinedTermina ? "Ruined Termina" : "Game over");
 +        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
@@ -3047,7 +3056,8 @@ index 0000000..9073297
 +    private int latchedMask = 0;
 +    private long notSwimmingSince = 0;
 +    private TextView swimToggleLabel, swimInvertLabel, stealthLabel, treeLabel, steerLabel;
-+    private boolean swimInvert, optionalStealth, treeChop, smoothSteer;
++    private boolean swimInvert, optionalStealth, treeChop, smoothSteer, ruinedTermina;
++    private TextView ruinedLabel;
 +
 +    private void applyLatches() {
 +        int want = (latchSwim ? N64_A : 0) | (latchPower ? (N64_A | N64_R) : 0);
@@ -5703,10 +5713,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..6b818b0
+index 0000000..b3d9f6e
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1664 @@
+@@ -0,0 +1,1922 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5748,6 +5758,7 @@ index 0000000..6b818b0
 +#include "z64skin_matrix.h"
 +#include "z64horse.h"
 +#include "gfx.h"
++#include "assets/objects/object_fall/object_fall.h"
 +s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
@@ -5952,6 +5963,8 @@ index 0000000..6b818b0
 +static s32 sStoppedFrames = 0;
 +static bool sTrailOn = true;
 +static bool sSkipping = false; // cutscene skip in progress
++static bool sRuined = false;         // Ruined Termina is active
++static bool sRuinedRedirect = false; // the moon just fell: next area change goes to Clock Town
 +
 +// ---------------------------------------------------------------- breadcrumbs (for crash reports)
 +// A small text file with what the game and the mod were doing, refreshed every few seconds and on every
@@ -6509,6 +6522,17 @@ index 0000000..6b818b0
 +static std::atomic<int> sInstantDoors{ 1 };
 +
 +extern "C" void MMMod_AdjustTransition(PlayState* play) {
++    if (sRuinedRedirect && (play->transitionMode == TRANS_MODE_SETUP)) {
++        // after the crash, wake up in what's left of South Clock Town
++        sRuinedRedirect = false;
++        play->nextEntrance = ENTRANCE(SOUTH_CLOCK_TOWN, 0);
++        gSaveContext.nextCutsceneIndex = 0;
++        gSaveContext.save.cutsceneIndex = 0;
++        gSaveContext.save.day = 3;
++        gSaveContext.save.time = CLOCK_TIME(4, 30);
++        play->transitionType = TRANS_TYPE_FADE_BLACK_SLOW;
++        return;
++    }
 +    if (!sInstantDoors.load()) return;
 +    if (play->transitionMode != TRANS_MODE_SETUP) return;
 +    switch (play->transitionType) {
@@ -6870,6 +6894,247 @@ index 0000000..6b818b0
 +    }
 +}
 +
++// ---------------------------------------------------------------- Ruined Termina (after the moon falls)
++// Instead of resetting, the world carries on: a frozen, ash-red last night with no moon in the sky
++// (it's in pieces on the ground), nobody left in town, and the dead walking. Clock Town and Termina Field
++// get an impact crater ringed with chunks of moon; everywhere else outdoors gets scattered debris.
++// Play the Song of Time to go back to the Dawn of the First Day as usual.
++static std::atomic<int> sRuinedEnabled{ 1 };
++static s32 sRuinedScene = -1;
++struct Debris {
++    Vec3f pos;
++    f32 scale;
++    s16 rotX, rotY;
++};
++static std::vector<Debris> sDebris;
++static Vec3f sCrater;
++static f32 sCraterRadius = 0.0f;
++static Actor* sUndead[8] = {};
++static s32 sUndeadTimer = 0;
++static s32 sObjRd = -1, sObjSkb = -1;
++
++extern "C" s32 MMMod_OnMoonCrash(PlayState* play) {
++    if (!sRuinedEnabled.load()) return false;
++    sRuined = true;
++    sRuinedRedirect = true;
++    sRuinedScene = -1;
++    Crumb("moon crash -> ruined termina");
++    return true; // don't reset the save
++}
++
++static bool IsTownScene(s16 id) {
++    return id == SCENE_CLOCKTOWER || id == SCENE_TOWN || id == SCENE_BACKTOWN || id == SCENE_ICHIBA;
++}
++
++static bool FloorAt(PlayState* play, f32 x, f32 z, f32 nearY, Vec3f* out) {
++    CollisionPoly* poly;
++    Vec3f p = { x, nearY + 600.0f, z };
++    f32 y = BgCheck_EntityRaycastFloor1(&play->colCtx, &poly, &p);
++    if (y <= BGCHECK_Y_MIN + 1.0f || fabsf(y - nearY) > 900.0f) return false;
++    *out = { x, y, z };
++    return true;
++}
++
++static void PlaceDebris(PlayState* play) {
++    sDebris.clear();
++    sCraterRadius = 0.0f;
++    Player* player = GET_PLAYER(play);
++    if (player == nullptr || play->skyboxId == SKYBOX_NONE) return; // indoors: just empty and dark
++    u32 seed = 0x9E3779B9u ^ (u32)play->sceneId;
++    auto rnd = [&seed]() {
++        seed = seed * 1664525u + 1013904223u;
++        return (seed >> 8) / (f32)(1 << 24);
++    };
++    Vec3f base = player->actor.world.pos;
++    bool town = IsTownScene(play->sceneId);
++    bool field = (play->sceneId == SCENE_00KEIKOKU);
++    if (town || field) {
++        // the impact: in town, the middle of the area; in the field, between Link and Clock Town
++        Vec3f c = { 0.0f, base.y, 0.0f };
++        if (field) {
++            f32 len = sqrtf(base.x * base.x + base.z * base.z);
++            f32 k = len > 1.0f ? 1700.0f / len : 0.0f;
++            c.x = base.x * k;
++            c.z = base.z * k;
++        }
++        if (FloorAt(play, c.x, c.z, base.y, &sCrater)) {
++            sCraterRadius = town ? 420.0f : 950.0f;
++            s32 ring = town ? 9 : 16;
++            for (s32 i = 0; i < ring; i++) {
++                f32 a = (i / (f32)ring) * 2.0f * M_PI + rnd() * 0.4f;
++                f32 d = sCraterRadius * (0.75f + rnd() * 0.45f);
++                Vec3f p;
++                if (FloorAt(play, sCrater.x + cosf(a) * d, sCrater.z + sinf(a) * d, sCrater.y, &p)) {
++                    sDebris.push_back({ p, 0.012f + rnd() * (town ? 0.014f : 0.03f), (s16)(rnd() * 0xFFFF),
++                                        (s16)(rnd() * 0xFFFF) });
++                }
++            }
++            // the biggest piece sits in the crater itself
++            sDebris.push_back({ sCrater, town ? 0.035f : 0.07f, 0x4000, (s16)(rnd() * 0xFFFF) });
++        }
++    }
++    // scattered fragments everywhere outdoors
++    s32 scatter = (town || field) ? 14 : 18;
++    for (s32 i = 0; i < scatter; i++) {
++        f32 a = rnd() * 2.0f * M_PI, d = 250.0f + rnd() * 1800.0f;
++        Vec3f p;
++        if (FloorAt(play, base.x + cosf(a) * d, base.z + sinf(a) * d, base.y, &p)) {
++            sDebris.push_back({ p, 0.004f + rnd() * 0.012f, (s16)(rnd() * 0xFFFF), (s16)(rnd() * 0xFFFF) });
++        }
++    }
++}
++
++// Scorched crater: a dark disc fading out at the edge, drawn just above the ground
++// 12 segments: centre + inner ring + faded outer ring = 25 vertices (fits the vertex cache)
++#define CRATER_SEG 12
++static Vtx sCraterVtx[1 + 2 * CRATER_SEG];
++static Gfx sCraterDL[4 + 2 * CRATER_SEG];
++static bool sCraterBuilt = false;
++
++static void BuildCrater() {
++    if (sCraterBuilt) return;
++    sCraterBuilt = true;
++    sCraterVtx[0] = (Vtx)VTX(0, 3, 0, 0, 0, 18, 10, 8, 235);
++    for (int i = 0; i < CRATER_SEG; i++) {
++        f32 a = i * (2.0f * M_PI / CRATER_SEG);
++        sCraterVtx[1 + i] = (Vtx)VTX((s16)(cosf(a) * 60), 3, (s16)(sinf(a) * 60), 0, 0, 28, 16, 12, 220);
++        sCraterVtx[1 + CRATER_SEG + i] = (Vtx)VTX((s16)(cosf(a) * 100), 3, (s16)(sinf(a) * 100), 0, 0, 50, 34, 24, 0);
++    }
++    Gfx* g = sCraterDL;
++    gSPVertex(g++, (uintptr_t)sCraterVtx, 1 + 2 * CRATER_SEG, 0);
++    for (int i = 0; i < CRATER_SEG; i++) {
++        int j = (i + 1) % CRATER_SEG;
++        int in_i = 1 + i, in_j = 1 + j, out_i = 1 + CRATER_SEG + i, out_j = 1 + CRATER_SEG + j;
++        gSP2Triangles(g++, 0, in_i, in_j, 0, in_i, out_i, out_j, 0); // dark centre + fading edge
++        gSP1Triangle(g++, in_i, out_j, in_j, 0);
++    }
++    gSPEndDisplayList(g++);
++}
++
++static void DrawRuins() {
++    PlayState* play = gPlayState;
++    if (!sRuined || play == nullptr || play->sceneId != sRuinedScene) return;
++    OPEN_DISPS(play->state.gfxCtx);
++    if (sCraterRadius > 0.0f) {
++        BuildCrater();
++        Gfx_SetupDL25_Xlu(play->state.gfxCtx);
++        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
++        gDPSetCombineMode(POLY_XLU_DISP++, G_CC_SHADE, G_CC_SHADE);
++        Matrix_Translate(sCrater.x, sCrater.y, sCrater.z, MTXMODE_NEW);
++        Matrix_Scale(sCraterRadius / 100.0f, 1.0f, sCraterRadius / 100.0f, MTXMODE_APPLY);
++        MATRIX_FINALIZE_AND_LOAD(POLY_XLU_DISP++, play->state.gfxCtx);
++        gSPDisplayList(POLY_XLU_DISP++, sCraterDL);
++    }
++    if (!sDebris.empty()) {
++        Gfx_SetupDL25_Opa(play->state.gfxCtx);
++        gDPSetPrimColor(POLY_OPA_DISP++, 0, 0x80, 40, 40, 40, 255); // dead, unlit eyes
++        for (auto& d : sDebris) {
++            // half-buried chunk of moon, face turned into the ground
++            Matrix_Translate(d.pos.x, d.pos.y - 1500.0f * d.scale, d.pos.z, MTXMODE_NEW);
++            Matrix_RotateYS(d.rotY, MTXMODE_APPLY);
++            Matrix_RotateXS(0x4000 + (d.rotX & 0x1FFF), MTXMODE_APPLY);
++            Matrix_Scale(d.scale, d.scale, d.scale, MTXMODE_APPLY);
++            MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gMoonDL);
++        }
++    }
++    CLOSE_DISPS(play->state.gfxCtx);
++}
++
++static void UpdateRuins(PlayState* play) {
++    if (!sRuined) return;
++    // Song of Time (or loading another save) starts a new cycle: the ruins are gone
++    if (gSaveContext.save.day != 3 && !sRuinedRedirect) {
++        sRuined = false;
++        sDebris.clear();
++        return;
++    }
++    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return;
++
++    // the last night never ends
++    gSaveContext.save.day = 3;
++    gSaveContext.save.time = CLOCK_TIME(4, 30);
++    gSaveContext.save.isNight = true;
++    gSaveContext.timerStates[TIMER_ID_MOON_CRASH] = TIMER_STATE_OFF;
++
++    if (play->sceneId != sRuinedScene) {
++        sRuinedScene = play->sceneId;
++        for (auto& u : sUndead) u = nullptr;
++        sUndeadTimer = 30;
++        sObjRd = sObjSkb = -1;
++        PlaceDebris(play);
++    }
++
++    // no moon in the sky, and nobody left
++    for (s32 cat = 0; cat < ACTORCAT_MAX; cat++) {
++        for (Actor* a = play->actorCtx.actorLists[cat].first; a != nullptr; a = a->next) {
++            if (a->id == ACTOR_EN_FALL) Actor_Kill(a);
++            else if (cat == ACTORCAT_NPC) Actor_Kill(a);
++        }
++    }
++
++    // ash-red sky and close fog outdoors, dim and cold indoors
++    EnvironmentContext* env = &play->envCtx;
++    bool outdoors = play->skyboxId != SKYBOX_NONE;
++    env->adjLightSettings.ambientColor[0] = outdoors ? 30 : -10;
++    env->adjLightSettings.ambientColor[1] = -25;
++    env->adjLightSettings.ambientColor[2] = -35;
++    env->adjLightSettings.light1Color[0] = outdoors ? 60 : 0;
++    env->adjLightSettings.light1Color[1] = -10;
++    env->adjLightSettings.light1Color[2] = -40;
++    env->adjLightSettings.fogColor[0] = outdoors ? 90 : 10;
++    env->adjLightSettings.fogColor[1] = outdoors ? 20 : 0;
++    env->adjLightSettings.fogColor[2] = -20;
++    env->adjLightSettings.fogNear = outdoors ? -180 : -60;
++
++    Player* player = GET_PLAYER(play);
++    if (player == nullptr || !outdoors) return;
++
++    // drifting embers
++    if ((play->gameplayFrames % 2) == 0) {
++        static Vec3f vel = { 0.0f, 0.6f, 0.0f }, acc = { 0.0f, 0.02f, 0.0f };
++        static Color_RGBA8 prim = { 255, 170, 60, 255 }, envc = { 255, 60, 0, 0 };
++        Vec3f p = player->actor.world.pos;
++        p.x += Rand_CenteredFloat(900.0f);
++        p.z += Rand_CenteredFloat(900.0f);
++        p.y += Rand_ZeroFloat(250.0f);
++        EffectSsKirakira_SpawnDispersed(play, &p, &vel, &acc, &prim, &envc, 2500, 60);
++    }
++
++    // the dead walk: keep a few ReDeads, Gibdos and Stalchildren around
++    if (sObjRd < 0) sObjRd = Object_GetSlot(&play->objectCtx, OBJECT_RD);
++    if (sObjRd < 0) sObjRd = Object_SpawnPersistent(&play->objectCtx, OBJECT_RD);
++    if (sObjSkb < 0) sObjSkb = Object_GetSlot(&play->objectCtx, OBJECT_SKB);
++    if (sObjSkb < 0) sObjSkb = Object_SpawnPersistent(&play->objectCtx, OBJECT_SKB);
++    if (--sUndeadTimer > 0) return;
++    sUndeadTimer = 90;
++    s32 cap = IsTownScene(play->sceneId) ? 4 : 6;
++    s32 alive = 0;
++    for (auto& u : sUndead) {
++        if (u != nullptr && u->update == nullptr) u = nullptr; // killed
++        if (u != nullptr) alive++;
++    }
++    if (alive >= cap) return;
++    for (auto& u : sUndead) {
++        if (u != nullptr) continue;
++        f32 a = Rand_ZeroFloat(2.0f * M_PI), d = 500.0f + Rand_ZeroFloat(700.0f);
++        Vec3f p;
++        if (!FloorAt(play, player->actor.world.pos.x + cosf(a) * d, player->actor.world.pos.z + sinf(a) * d,
++                     player->actor.world.pos.y, &p)) {
++            break;
++        }
++        f32 pick = Rand_ZeroOne();
++        if (pick < 0.65f && sObjRd >= 0 && Object_IsLoaded(&play->objectCtx, sObjRd)) {
++            // ReDeads, some as Gibdos
++            s16 type = (pick < 0.35f) ? 1 : 0xFE;
++            u = Actor_Spawn(&play->actorCtx, play, ACTOR_EN_RD, p.x, p.y, p.z, 0, (s16)(a * 10430.0f), 0, type);
++        } else if (sObjSkb >= 0 && Object_IsLoaded(&play->objectCtx, sObjSkb)) {
++            u = Actor_Spawn(&play->actorCtx, play, ACTOR_EN_SKB, p.x, p.y, p.z, 0, (s16)(a * 10430.0f), 0, 0);
++        }
++        break; // one at a time
++    }
++}
++
 +// ---------------------------------------------------------------- optional stealth (used by guard actors)
 +static std::atomic<int> sOptionalStealth{ 1 };
 +
@@ -7086,6 +7351,7 @@ index 0000000..6b818b0
 +    UpdateMarker(play);
 +    UpdateMiniMap(play);
 +    UpdateTreeChopping(play);
++    UpdateRuins(play);
 +    SmoothSteering(play);
 +    {
 +        Player* p = GET_PLAYER(play);
@@ -7156,6 +7422,7 @@ index 0000000..6b818b0
 +        hookRegistered = true;
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPassPlayerInputs>(OnPlayerInputs);
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateUpdate>(OnGameStateUpdate);
++        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawWorldEnd>(DrawRuins);
 +        ReadSnapshotFile();
 +    }
 +    ApplyPresetOnce();
@@ -7356,6 +7623,7 @@ index 0000000..6b818b0
 +    if (option == 7) sInvertSwim = value;      // 1 = invert up/down while swimming underwater
 +    if (option == 8) sTreeChop = value;        // 1 = trees can be chopped down
 +    if (option == 9) sSmoothSteer = value;     // 1 = smoother swimming / horse steering
++    if (option == 10) sRuinedEnabled = value;  // 1 = Ruined Termina after the moon falls
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
 +        sOurMap = value;
 +        sMinimapReq = 1;
@@ -7401,6 +7669,31 @@ index f0e57da..baa4dae 100644
          // If opposed directions on the D-Pad are pressed at the same time, mask both out
          if ((input->cur.button & (BTN_DDOWN | BTN_DUP)) == (BTN_DDOWN | BTN_DUP)) {
              input->cur.button &= ~(BTN_DDOWN | BTN_DUP);
+diff --git a/mm/src/code/z_demo.c b/mm/src/code/z_demo.c
+index e3e1aaf..9c72277 100644
+--- a/mm/src/code/z_demo.c
++++ b/mm/src/code/z_demo.c
+@@ -154,6 +154,8 @@ void CutsceneHandler_StartScript(PlayState* play, CutsceneContext* csCtx) {
+ 
+ /* Start of command handling section */
+ 
++s32 MMMod_OnMoonCrash(PlayState* play);
++
+ void CutsceneCmd_Misc(PlayState* play, CutsceneContext* csCtx, CsCmdMisc* cmd) {
+     static u16 D_801BB15C = 0xFFFF;
+     Player* player = GET_PLAYER(play);
+@@ -376,7 +378,10 @@ void CutsceneCmd_Misc(PlayState* play, CutsceneContext* csCtx, CsCmdMisc* cmd) {
+ 
+         case CS_MISC_RESET_SAVE_FROM_MOON_CRASH:
+             if (isFirstFrame) {
+-                Sram_ResetSaveFromMoonCrash(&play->sramCtx);
++                // Majora's Mask touch mod: "Ruined Termina" keeps the world going after the moon falls
++                if (!MMMod_OnMoonCrash(play)) {
++                    Sram_ResetSaveFromMoonCrash(&play->sramCtx);
++                }
+             }
+             break;
+ 
 diff --git a/mm/src/code/z_play.c b/mm/src/code/z_play.c
 index fa46547..92a08eb 100644
 --- a/mm/src/code/z_play.c
