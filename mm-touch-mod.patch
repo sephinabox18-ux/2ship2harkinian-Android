@@ -139,10 +139,10 @@ index 0000000..b6c94da
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..e2b18e6
+index 0000000..39011f3
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,247 @@
+@@ -0,0 +1,256 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -197,14 +197,14 @@ index 0000000..e2b18e6
 +        this.mode = mode;
 +        heartEmpty.setColor(Color.argb(150, 40, 12, 14));
 +        heartEdge.setStyle(Paint.Style.STROKE);
-+        heartEdge.setColor(Color.argb(230, 30, 8, 8));
++        heartEdge.setColor(Ornate.soft ? Color.argb(150, 255, 255, 255) : Color.argb(230, 30, 8, 8));
 +        heartShine.setColor(Color.argb(110, 255, 255, 255));
 +        frame.setStyle(Paint.Style.STROKE);
-+        frameFill.setColor(Color.argb(170, 10, 14, 10));
++        frameFill.setColor(Ornate.soft ? Color.argb(80, 0, 0, 0) : Color.argb(170, 10, 14, 10));
 +        gemEdge.setStyle(Paint.Style.STROKE);
 +        gemEdge.setColor(Ornate.GOLD_LIGHT);
-+        text.setColor(Ornate.CREAM);
-+        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        text.setColor(Ornate.TEXT);
++        text.setTypeface(Ornate.font());
 +        applySizes();
 +    }
 +
@@ -282,7 +282,8 @@ index 0000000..e2b18e6
 +
 +        // Hearts
 +        int health = hud[0];
-+        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE : Color.argb(230, 30, 8, 8));
++        heartEdge.setColor((hud[8] & 1) != 0 ? Color.WHITE
++                : (Ornate.soft ? Color.argb(150, 255, 255, 255) : Color.argb(230, 30, 8, 8)));
 +        for (int i = 0; i < maxHearts; i++) {
 +            float cx = x0 + (i % 10) * step;
 +            float cy = heartsTop() + (i / 10) * heartRowGap();
@@ -316,7 +317,7 @@ index 0000000..e2b18e6
 +            float y = heartsBottom() + dp(6);
 +            float gs = barH * 0.95f;
 +            float gx = pad() + gs * 0.75f;
-+            float bl = gx + gs * 0.55f, len = magicLen();
++            float bl = Ornate.soft ? pad() + dp(1) : gx + gs * 0.55f, len = magicLen();
 +            r.set(bl, y, bl + len, y + barH);
 +            c.drawRoundRect(r, barH / 2, barH / 2, frameFill);
 +            float frac = Math.max(0f, Math.min(1f, hud[2] / (float) hud[3]));
@@ -326,10 +327,18 @@ index 0000000..e2b18e6
 +                        Shader.TileMode.CLAMP));
 +                c.drawRoundRect(f, barH / 2, barH / 2, magicFill);
 +            }
-+            frame.setShader(new LinearGradient(bl, y, bl, y + barH,
-+                    new int[] { Ornate.GOLD_LIGHT, Ornate.GOLD_MID, Ornate.GOLD_DARK }, null, Shader.TileMode.CLAMP));
-+            c.drawRoundRect(r, barH / 2, barH / 2, frame);
-+            Ornate.drawGem(c, gx, y + barH / 2, gs, gem, gemEdge);
++            if (Ornate.soft) {
++                frame.setShader(null);
++                frame.setColor(Color.argb(140, 255, 255, 255));
++                frame.setStrokeWidth(dp(1.2f));
++                c.drawRoundRect(r, barH / 2, barH / 2, frame);
++            } else {
++                frame.setShader(new LinearGradient(bl, y, bl, y + barH,
++                        new int[] { Ornate.GOLD_LIGHT, Ornate.GOLD_MID, Ornate.GOLD_DARK }, null, Shader.TileMode.CLAMP));
++                frame.setStrokeWidth(dp(2.2f));
++                c.drawRoundRect(r, barH / 2, barH / 2, frame);
++                Ornate.drawGem(c, gx, y + barH / 2, gs, gem, gemEdge);
++            }
 +        }
 +    }
 +
@@ -348,7 +357,7 @@ index 0000000..e2b18e6
 +        c.drawPath(p, rupee);
 +        float tx = rx + 2 * g + dp(4);
 +        boolean full = hud[4] >= hud[5] && hud[5] > 0;
-+        text.setColor(full ? Color.rgb(140, 240, 140) : Ornate.CREAM);
++        text.setColor(full ? Color.rgb(140, 240, 140) : Ornate.TEXT);
 +        String rupees = String.valueOf(hud[4]);
 +        c.drawText(rupees, tx, ty, text);
 +        tx += text.measureText(rupees) + dp(10);
@@ -360,7 +369,7 @@ index 0000000..e2b18e6
 +        int day = Math.max(1, Math.min(3, hud[6]));
 +        String clock = (night ? "\u263E " : "\u2600 ") + "Day " + day + " \u00B7 " + hr12 + ":" + (mn < 10 ? "0" : "") + mn
 +                + (hr < 12 ? " AM" : " PM");
-+        text.setColor(day == 3 && night ? Color.rgb(250, 130, 110) : Ornate.CREAM); // final night: gentle warning
++        text.setColor(day == 3 && night ? Color.rgb(250, 130, 110) : Ornate.TEXT); // final night: gentle warning
 +        c.drawText(clock, tx, ty, text);
 +    }
 +
@@ -454,7 +463,7 @@ index fe546c8..f3eba42 100644
      private int rightStickPointerId = MotionEvent.INVALID_POINTER_ID;
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java b/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java
 new file mode 100644
-index 0000000..6c3817a
+index 0000000..1d1e175
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MarkerView.java
 @@ -0,0 +1,108 @@
@@ -485,12 +494,12 @@ index 0000000..6c3817a
 +
 +    public MarkerView(Context c) {
 +        super(c);
-+        fill.setColor(Ornate.GOLD_LIGHT);
++        fill.setColor(Ornate.ACCENT);
 +        edge.setStyle(Paint.Style.STROKE);
 +        edge.setColor(Color.argb(220, 60, 40, 10));
-+        text.setColor(Ornate.CREAM);
++        text.setColor(Ornate.TEXT);
 +        text.setTextAlign(Paint.Align.CENTER);
-+        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        text.setTypeface(Ornate.font());
 +    }
 +
 +    private float dp(float v) {
@@ -568,10 +577,10 @@ index 0000000..6c3817a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java b/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java
 new file mode 100644
-index 0000000..08a5f20
+index 0000000..648452a
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,186 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -613,9 +622,9 @@ index 0000000..08a5f20
 +        rim.setStyle(Paint.Style.STROKE);
 +        markEdge.setStyle(Paint.Style.STROKE);
 +        markEdge.setColor(Color.argb(220, 20, 16, 8));
-+        text.setColor(Ornate.CREAM);
++        text.setColor(Ornate.TEXT);
 +        text.setTextAlign(Paint.Align.CENTER);
-+        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        text.setTypeface(Ornate.font());
 +    }
 +
 +    private float dp(float v) {
@@ -643,8 +652,8 @@ index 0000000..08a5f20
 +
 +    private static Bitmap buildBitmap(byte[] g, int w, int h) {
 +        int[] px = new int[w * h];
-+        int fill = Color.argb(150, 70, 150, 130);
-+        int edge = Color.argb(235, 200, 240, 225);
++        int fill = Ornate.soft ? Color.argb(70, 255, 255, 255) : Color.argb(150, 70, 150, 130);
++        int edge = Ornate.soft ? Color.argb(205, 255, 255, 255) : Color.argb(235, 200, 240, 225);
 +        for (int z = 0; z < h; z++) {
 +            for (int x = 0; x < w; x++) {
 +                if (g[z * w + x] == 0) continue;
@@ -661,7 +670,12 @@ index 0000000..08a5f20
 +        float w = getWidth(), h = getHeight();
 +        float r = dp(14);
 +        rf.set(dp(2), dp(2), w - dp(2), h - dp(2));
-+        bg.setShader(new LinearGradient(0, 0, 0, h, Color.argb(205, 22, 44, 36), Color.argb(215, 8, 16, 14), Shader.TileMode.CLAMP));
++        if (Ornate.soft) {
++            bg.setShader(null);
++            bg.setColor(Color.argb(110, 12, 14, 18));
++        } else {
++            bg.setShader(new LinearGradient(0, 0, 0, h, Color.argb(205, 22, 44, 36), Color.argb(215, 8, 16, 14), Shader.TileMode.CLAMP));
++        }
 +        c.drawRoundRect(rf, r, r, bg);
 +
 +        if (info.length >= 12 && map != null) {
@@ -709,7 +723,7 @@ index 0000000..08a5f20
 +            p.lineTo(cx, cy + s * 0.45f);
 +            p.lineTo(cx - s, cy + s);
 +            p.close();
-+            mark.setColor(Ornate.GOLD_LIGHT);
++            mark.setColor(Ornate.ACCENT);
 +            c.drawPath(p, mark);
 +            markEdge.setStrokeWidth(dp(1.2f));
 +            c.drawPath(p, markEdge);
@@ -717,8 +731,8 @@ index 0000000..08a5f20
 +            c.restore();
 +        }
 +
-+        rim.setStrokeWidth(dp(2));
-+        rim.setColor(Ornate.GOLD_MID);
++        rim.setStrokeWidth(Ornate.soft ? dp(1) : dp(2));
++        rim.setColor(Ornate.soft ? Color.argb(70, 255, 255, 255) : Ornate.GOLD_MID);
 +        rf.set(dp(2), dp(2), w - dp(2), h - dp(2));
 +        c.drawRoundRect(rf, r, r, rim);
 +    }
@@ -729,7 +743,7 @@ index 0000000..08a5f20
 +        switch (type) {
 +            case 1: // chest, not opened yet
 +            case 2: // opened chest
-+                mark.setColor(type == 1 ? Ornate.GOLD_LIGHT : Color.argb(170, 150, 150, 140));
++                mark.setColor(type == 1 ? Ornate.ACCENT : Color.argb(170, 150, 150, 140));
 +                rf.set(x - s, y - s * 0.75f, x + s, y + s * 0.75f);
 +                c.drawRoundRect(rf, dp(1.5f), dp(1.5f), mark);
 +                c.drawRoundRect(rf, dp(1.5f), dp(1.5f), markEdge);
@@ -740,7 +754,7 @@ index 0000000..08a5f20
 +                c.drawCircle(x, y, s * 0.8f, markEdge);
 +                break;
 +            case 4: // objective
-+                mark.setColor(Ornate.GOLD_LIGHT);
++                mark.setColor(Ornate.ACCENT);
 +                p.reset();
 +                p.moveTo(x, y - s * 1.3f);
 +                p.lineTo(x + s, y);
@@ -755,10 +769,10 @@ index 0000000..08a5f20
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..7b9b428
+index 0000000..3f0a88d
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2391 @@
+@@ -0,0 +1,2446 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -809,8 +823,8 @@ index 0000000..7b9b428
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
-+    static final int GOLD = Color.rgb(232, 196, 92);
-+    static final int GOLD_SOFT = Color.argb(150, 232, 196, 92);
++    static int GOLD = Color.rgb(232, 196, 92);            // heading / accent colour (soft style: warm white)
++    static int GOLD_SOFT = Color.argb(150, 232, 196, 92);
 +    static final int PANEL_BG = Color.argb(205, 12, 10, 22);
 +
 +    private static final String PREFS = "com.twoshipfork.mm.touchlayout";
@@ -939,6 +953,8 @@ index 0000000..7b9b428
 +    private final int[] gridShown = new int[24];
 +    private int gridCursorShown = -2;
 +
++    private boolean softStyle = true;
++    private TextView styleLabel;
 +    private boolean editing = false;
 +    private boolean menuMode = false; // 2 Ship settings menu open: overlay steps aside so the menu gets touches
 +    private TextView closeMenuBtn;
@@ -998,6 +1014,10 @@ index 0000000..7b9b428
 +        act = activity;
 +        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        opacity = prefs.getFloat("opacity", 0.85f);
++        softStyle = prefs.getBoolean("softStyle", true);
++        Ornate.setSoft(softStyle);
++        GOLD = softStyle ? Color.rgb(255, 236, 205) : Color.rgb(232, 196, 92);
++        GOLD_SOFT = softStyle ? Color.argb(90, 255, 255, 255) : Color.argb(150, 232, 196, 92);
 +        questPanelOn = prefs.getBoolean("questPanel", true);
 +        swipeCamera = prefs.getBoolean("swipeCamera", true);
 +        typicalSwipe = prefs.getFloat("typicalSwipe", 900f);
@@ -1345,8 +1365,8 @@ index 0000000..7b9b428
 +
 +    private TextView hudText(float sp) {
 +        TextView t = new TextView(act);
-+        t.setTextColor(Color.rgb(243, 233, 210));
-+        t.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        t.setTextColor(Ornate.TEXT);
++        t.setTypeface(Ornate.font());
 +        t.setShadowLayer(5f, 0f, 2f, Color.BLACK);
 +        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
 +        return t;
@@ -1354,6 +1374,13 @@ index 0000000..7b9b428
 +
 +    // Every panel shares one look: deep green glass fading to near-black, rounded, with a gold rim.
 +    private GradientDrawable panelDrawable() {
++        if (softStyle) {
++            GradientDrawable soft = new GradientDrawable();
++            soft.setColor(Color.argb(125, 12, 14, 18));
++            soft.setCornerRadius(dp(12));
++            soft.setStroke(dp(1), Color.argb(55, 255, 255, 255));
++            return soft;
++        }
 +        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
 +                new int[] { Color.argb(232, 24, 46, 38), Color.argb(238, 8, 16, 14) });
 +        bg.setCornerRadius(dp(14));
@@ -1363,11 +1390,18 @@ index 0000000..7b9b428
 +
 +    // Buttons inside menus: small green pills with a thin gold edge
 +    private GradientDrawable pillDrawable(boolean on) {
++        if (softStyle) {
++            GradientDrawable soft = new GradientDrawable();
++            soft.setColor(on ? Color.argb(150, 255, 214, 140) : Color.argb(45, 255, 255, 255));
++            soft.setCornerRadius(dp(18));
++            soft.setStroke(dp(1), on ? Ornate.ACCENT : Color.argb(70, 255, 255, 255));
++            return soft;
++        }
 +        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
 +                on ? new int[] { Color.rgb(176, 132, 52), Color.rgb(110, 76, 24) }
 +                   : new int[] { Color.argb(220, 52, 98, 78), Color.argb(220, 20, 48, 38) });
 +        bg.setCornerRadius(dp(18));
-+        bg.setStroke(dp(1.5f), on ? Ornate.GOLD_LIGHT : Color.argb(200, 198, 160, 82));
++        bg.setStroke(dp(1.5f), on ? Ornate.ACCENT : Color.argb(200, 198, 160, 82));
 +        return bg;
 +    }
 +
@@ -1393,7 +1427,7 @@ index 0000000..7b9b428
 +        t.setGravity(Gravity.CENTER);
 +        t.setText(c.sub.isEmpty() ? c.label : c.label + "\n" + c.sub);
 +        if (c.value == N64_A && c.kind == KIND_N64) {
-+            t.setTextColor(Ornate.GOLD_LIGHT);
++            t.setTextColor(Ornate.ACCENT);
 +            t.setText("A");
 +        }
 +        v.addView(t, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -1419,7 +1453,7 @@ index 0000000..7b9b428
 +            c.icon = iv;
 +            // ammo count, bottom-right like the game's own C buttons
 +            TextView ammo = new TextView(act);
-+            ammo.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++            ammo.setTypeface(Ornate.font());
 +            ammo.setTextColor(Color.WHITE);
 +            ammo.setShadowLayer(4f, 0f, 1.5f, Color.BLACK);
 +            ammo.setGravity(Gravity.CENTER);
@@ -1449,10 +1483,10 @@ index 0000000..7b9b428
 +        p.setBackground(panelDrawable());
 +        questWhere = new TextView(act);
 +        questWhere.setTextColor(GOLD);
-+        questWhere.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        questWhere.setTypeface(Ornate.font());
 +        questTitle = new TextView(act);
 +        questTitle.setTextColor(Color.WHITE);
-+        questTitle.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        questTitle.setTypeface(Ornate.font());
 +        questTitle.setShadowLayer(4f, 0f, 1.5f, Color.BLACK);
 +        questText = new TextView(act);
 +        questText.setTextColor(Color.argb(225, 245, 240, 225));
@@ -1472,7 +1506,7 @@ index 0000000..7b9b428
 +        TextView title = new TextView(act);
 +        title.setText("Songs");
 +        title.setTextColor(GOLD);
-+        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        title.setTypeface(Ornate.font());
 +        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
 +        title.setPadding(dp(6), 0, 0, dp(4));
 +        songsPanel.addView(title);
@@ -1624,6 +1658,20 @@ index 0000000..7b9b428
 +    }
 +
 +    private int lastAction = -99;
++    private String aLabel = null;
++
++    // Size a word so it fits on one line well inside a round button of the given diameter
++    private void fitText(TextView t, String word, float diameter) {
++        t.setSingleLine(true);
++        t.setIncludeFontPadding(false);
++        float maxW = diameter * 0.62f;          // stay inside the inner ring
++        float size = diameter * 0.24f;
++        android.graphics.Paint p = new android.graphics.Paint(t.getPaint());
++        p.setTextSize(size);
++        float wNow = p.measureText(word);
++        if (wNow > maxW) size *= maxW / wNow;
++        t.setTextSize(TypedValue.COMPLEX_UNIT_PX, Math.max(diameter * 0.10f, size));
++    }
 +    private float lastAsize = -1;
 +
 +    private void updateActionAndForm() {
@@ -1639,13 +1687,13 @@ index 0000000..7b9b428
 +        lastAsize = aCtl.size;
 +        lastAction = a[0];
 +        String label = actionLabel(a[0]);
++        aLabel = label;
 +        if (label == null) {
 +            aCtl.text.setVisibility(View.GONE);
 +            aCtl.iconView.setVisibility(View.VISIBLE);
 +        } else {
 +            aCtl.text.setText(label);
-+            float k = label.length() <= 4 ? 0.15f : (label.length() <= 6 ? 0.125f : 0.105f);
-+            aCtl.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, dp(aCtl.size) * k);
++            fitText(aCtl.text, label, dp(aCtl.size));
 +            aCtl.text.setVisibility(View.VISIBLE);
 +            aCtl.iconView.setVisibility(View.GONE);
 +        }
@@ -1685,7 +1733,7 @@ index 0000000..7b9b428
 +            TextView n = hudText(24);
 +            n.setText(glyphs[i]);
 +            n.setGravity(Gravity.CENTER);
-+            n.setTextColor(mask == N64_A ? Ornate.GOLD_LIGHT : Color.rgb(255, 226, 120));
++            n.setTextColor(mask == N64_A ? Ornate.ACCENT : Color.rgb(255, 226, 120));
 +            n.setBackground(new Ornate.ButtonDrawable(STYLE_PLAIN, false,
 +                    mask == N64_A ? Ornate.THEME_BLUE : Ornate.THEME_YELLOW));
 +            n.setOnTouchListener((v, e) -> {
@@ -1723,9 +1771,9 @@ index 0000000..7b9b428
 +            final int idx = Integer.parseInt(line.substring(0, colon));
 +            TextView row = new TextView(act);
 +            row.setText(line.substring(colon + 1));
-+            row.setTextColor(Ornate.CREAM);
++            row.setTextColor(Ornate.TEXT);
 +            row.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-+            row.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++            row.setTypeface(Ornate.font());
 +            row.setPadding(dp(8), dp(7), dp(8), dp(7));
 +            row.setOnClickListener(v -> {
 +                touched();
@@ -1926,8 +1974,8 @@ index 0000000..7b9b428
 +        }
 +        gridContent.addView(pauseGridBox);
 +        pauseItemName = new TextView(act);
-+        pauseItemName.setTextColor(Color.rgb(243, 233, 210));
-+        pauseItemName.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        pauseItemName.setTextColor(Ornate.TEXT);
++        pauseItemName.setTypeface(Ornate.font());
 +        pauseItemName.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
 +        pauseItemName.setGravity(Gravity.CENTER);
 +        pauseItemName.setPadding(0, dp(6), 0, 0);
@@ -2026,7 +2074,7 @@ index 0000000..7b9b428
 +        t.setText(text);
 +        t.setTextColor(color);
 +        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
-+        t.setTypeface(serif ? Typeface.create(Typeface.SERIF, Typeface.BOLD) : Typeface.DEFAULT_BOLD);
++        t.setTypeface(serif ? Ornate.font() : Typeface.DEFAULT_BOLD);
 +        t.setPadding(dp(4), dp(3), dp(4), dp(3));
 +        return t;
 +    }
@@ -2048,7 +2096,7 @@ index 0000000..7b9b428
 +            iv.setAlpha(have[i] ? 1f : 0.22f);
 +            cell.addView(iv, new LinearLayout.LayoutParams(dp(42), dp(42)));
 +            if (captions != null) {
-+                TextView cap = infoLine(captions[i], 11, have[i] ? Color.rgb(243, 233, 210) : Color.argb(120, 243, 233, 210), false);
++                TextView cap = infoLine(captions[i], 11, have[i] ? Ornate.TEXT : Color.argb(120, 243, 233, 210), false);
 +                cap.setGravity(Gravity.CENTER);
 +                cell.addView(cap);
 +            }
@@ -2074,7 +2122,7 @@ index 0000000..7b9b428
 +                    new boolean[] { info[10] != 0, info[11] != 0, info[12] != 0 },
 +                    new String[] { "Map", "Compass", "Boss Key" }));
 +            mapContent.addView(infoLine("Small keys: " + info[13] + "      Stray fairies: " + info[14] + " / 15", 14,
-+                    Color.rgb(243, 233, 210), false));
++                    Ornate.TEXT, false));
 +            mapContent.addView(infoLine("The dungeon map shows on screen when you have it \u2014 move or resize it in Edit controls.",
 +                    11, Color.argb(170, 255, 255, 255), false));
 +        } else {
@@ -2087,7 +2135,7 @@ index 0000000..7b9b428
 +            for (int i = 0; i < OWL_NAMES.length; i++) {
 +                boolean on = (owls & (1 << i)) != 0;
 +                TextView t = infoLine((on ? "\u25C6 " : "\u25C7 ") + OWL_NAMES[i], 14,
-+                        on ? Color.rgb(243, 233, 210) : Color.argb(110, 243, 233, 210), false);
++                        on ? Ornate.TEXT : Color.argb(110, 243, 233, 210), false);
 +                (i < 5 ? c1 : c2).addView(t);
 +            }
 +            cols.addView(c1, new LinearLayout.LayoutParams(dp(200), ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -2133,10 +2181,10 @@ index 0000000..7b9b428
 +            }
 +        }
 +        questContent.addView(infoLine("Songs", 14, GOLD, true));
-+        TextView songLine = infoLine(songs.length() > 0 ? songs.toString() : "None yet", 13, Color.rgb(243, 233, 210), false);
++        TextView songLine = infoLine(songs.length() > 0 ? songs.toString() : "None yet", 13, Ornate.TEXT, false);
 +        songLine.setMaxWidth(dp(420));
 +        questContent.addView(songLine);
-+        questContent.addView(infoLine("Pieces of Heart: " + info[2] + " / 4", 13, Color.rgb(243, 233, 210), false));
++        questContent.addView(infoLine("Pieces of Heart: " + info[2] + " / 4", 13, Ornate.TEXT, false));
 +        if (iconPending) lastQuestKey = "";
 +    }
 +
@@ -2224,7 +2272,7 @@ index 0000000..7b9b428
 +        TextView title = new TextView(act);
 +        title.setText("Touch settings");
 +        title.setTextColor(GOLD);
-+        title.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        title.setTypeface(Ornate.font());
 +        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
 +        title.setPadding(dp(4), 0, 0, dp(6));
 +        settingsPanel.addView(title);
@@ -2281,6 +2329,12 @@ index 0000000..7b9b428
 +            prefs.edit().putBoolean("fpInverted", fpInverted).apply();
 +            act.nativeMmSetOption(4, fpInverted ? 1 : 0);
 +            refreshSettings();
++        });
++        styleLabel = settingsRow(settingsPanel, "Look", null, null, "Change", () -> {
++            softStyle = !softStyle;
++            prefs.edit().putBoolean("softStyle", softStyle).apply();
++            refreshSettings();
++            showToast("Restart the app to switch the look");
 +        });
 +        hudTypeLabel = settingsRow(settingsPanel, "Game HUD", null, null, "Change", () -> {
 +            modernHud = !modernHud;
@@ -2356,6 +2410,7 @@ index 0000000..7b9b428
 +        autoRunLabel.setText(autoRun ? "On" : "Off");
 +        markerLabel.setText(markerOn ? "On" : "Off");
 +        ourMapLabel.setText(ourMap ? "Clean map" : "Game's map");
++        styleLabel.setText(softStyle ? "Soft" : "Zelda gold");
 +        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
@@ -2405,9 +2460,9 @@ index 0000000..7b9b428
 +    private TextView trayTile(String icon, String label, View.OnClickListener onClick, boolean closesTray) {
 +        TextView b = new TextView(act);
 +        b.setText(icon + "\n" + label);
-+        b.setTextColor(Ornate.CREAM);
++        b.setTextColor(Ornate.TEXT);
 +        b.setGravity(Gravity.CENTER);
-+        b.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        b.setTypeface(Ornate.font());
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 +        b.setLineSpacing(dp(2), 1f);
 +        b.setBackground(tileDrawable(false));
@@ -2424,11 +2479,18 @@ index 0000000..7b9b428
 +    }
 +
 +    private GradientDrawable tileDrawable(boolean on) {
++        if (softStyle) {
++            GradientDrawable soft = new GradientDrawable();
++            soft.setColor(on ? Color.argb(110, 255, 214, 140) : Color.argb(40, 255, 255, 255));
++            soft.setCornerRadius(dp(10));
++            soft.setStroke(dp(on ? 1.5f : 1f), on ? Ornate.ACCENT : Color.argb(55, 255, 255, 255));
++            return soft;
++        }
 +        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
 +                on ? new int[] { Color.rgb(176, 132, 52), Color.rgb(110, 76, 24) }
 +                   : new int[] { Color.argb(200, 40, 76, 62), Color.argb(210, 14, 34, 28) });
 +        bg.setCornerRadius(dp(12));
-+        bg.setStroke(dp(on ? 2 : 1.2f), on ? Ornate.GOLD_LIGHT : Color.argb(170, 198, 160, 82));
++        bg.setStroke(dp(on ? 2 : 1.2f), on ? Ornate.ACCENT : Color.argb(170, 198, 160, 82));
 +        return bg;
 +    }
 +
@@ -2549,12 +2611,12 @@ index 0000000..7b9b428
 +    private TextView editButton(String label, View.OnClickListener onClick) {
 +        TextView b = new TextView(act);
 +        b.setText(label);
-+        b.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
++        b.setTypeface(Ornate.font());
 +        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
 +        b.setGravity(Gravity.CENTER);
 +        if (onClick != null) {
 +            // a real button: pill shape
-+            b.setTextColor(Ornate.CREAM);
++            b.setTextColor(Ornate.TEXT);
 +            b.setBackground(pillDrawable(false));
 +            b.setPadding(dp(12), dp(6), dp(12), dp(6));
 +            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -2567,7 +2629,7 @@ index 0000000..7b9b428
 +            });
 +        } else {
 +            // a label
-+            b.setTextColor(Ornate.GOLD_LIGHT);
++            b.setTextColor(Ornate.ACCENT);
 +            b.setPadding(dp(8), dp(6), dp(8), dp(6));
 +        }
 +        return b;
@@ -2640,7 +2702,11 @@ index 0000000..7b9b428
 +            c.view.setLayoutParams(lp);
 +            float ratio = c.kind == KIND_SKIP ? 0.30f
 +                    : (c.sub.isEmpty() ? (c.label.length() > 3 ? 0.22f : (c.style == STYLE_C ? 0.36f : 0.42f)) : 0.24f);
-+            if (c.text != null) c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
++            if (c == aCtl && aLabel != null) {
++                fitText(c.text, aLabel, px);      // keep the action word inside the button
++            } else if (c.text != null) {
++                c.text.setTextSize(TypedValue.COMPLEX_UNIT_PX, px * ratio);
++            }
 +            if (c.kind == KIND_MINIMAP) {
 +                c.view.setVisibility(editing ? View.VISIBLE : View.GONE);
 +                if (editing) c.view.setAlpha(c.hidden ? 0.3f : 1f);
@@ -2757,6 +2823,9 @@ index 0000000..7b9b428
 +
 +    private void setPressed(Ctl c, boolean pressed) {
 +        c.view.animate().scaleX(pressed ? 0.92f : 1f).scaleY(pressed ? 0.92f : 1f).setDuration(60).start();
++        if (softStyle && (c.kind == KIND_N64 || c.kind == KIND_ACTION || c.kind == KIND_WHEEL || c.kind == KIND_POUND)) {
++            c.view.setBackground(styleFor(c, pressed || (c == sprintCtl && sprintUiOn)));
++        }
 +    }
 +
 +    private boolean sprintUiOn = false;
@@ -3152,10 +3221,10 @@ index 0000000..7b9b428
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..946c659
+index 0000000..fa3a0b8
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,661 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3170,6 +3239,7 @@ index 0000000..946c659
 +import android.graphics.Rect;
 +import android.graphics.RectF;
 +import android.graphics.Shader;
++import android.graphics.Typeface;
 +import android.graphics.drawable.Drawable;
 +import android.view.View;
 +
@@ -3186,6 +3256,32 @@ index 0000000..946c659
 +    static final int GOLD_LIGHT = Color.rgb(246, 222, 150);
 +    static final int CREAM = Color.rgb(240, 232, 210);
 +    static final int GEM_LIGHT = Color.rgb(120, 230, 150);
++
++    // ---- UI style: "soft" = subdued translucent white (like modern mobile games), else the gold Zelda look
++    static boolean soft = true;
++    static int TEXT = Color.rgb(246, 246, 244);
++    static int ACCENT = Color.rgb(255, 226, 168);
++
++    static void setSoft(boolean s) {
++        soft = s;
++        TEXT = s ? Color.rgb(246, 246, 244) : CREAM;
++        ACCENT = s ? Color.rgb(255, 226, 168) : GOLD_LIGHT;
++    }
++
++    static Typeface font() {
++        return soft ? Typeface.create("sans-serif-medium", Typeface.NORMAL) : Typeface.create(Typeface.SERIF, Typeface.BOLD);
++    }
++
++    // Soft style: a chosen colour only tints the ring
++    static int softTint(int style, int theme) {
++        switch (theme) {
++            case THEME_GREEN: return Color.rgb(150, 225, 185);
++            case THEME_BLUE: return Color.rgb(150, 200, 245);
++            case THEME_YELLOW: return Color.rgb(250, 218, 140);
++            case THEME_RED: return Color.rgb(245, 150, 140);
++            default: return Color.WHITE;
++        }
++    }
 +    static final int GEM_DARK = Color.rgb(20, 120, 60);
 +
 +    // Colour themes a button can use (chosen per button in Edit controls)
@@ -3254,6 +3350,10 @@ index 0000000..946c659
 +
 +        @Override
 +        public void draw(Canvas c) {
++            if (soft) {
++                drawSoft(c);
++                return;
++            }
 +            Rect b = getBounds();
 +            float cx = b.exactCenterX(), cy = b.exactCenterY();
 +            float r = Math.min(b.width(), b.height()) / 2f;
@@ -3282,6 +3382,30 @@ index 0000000..946c659
 +            ring.setAlpha(alpha);
 +            c.drawCircle(cx, cy, rr, ring);
 +
++        }
++
++        // Soft: a faint dark disc with a thin white ring; when used, a warm glow fills it
++        private void drawSoft(Canvas c) {
++            Rect b = getBounds();
++            float cx = b.exactCenterX(), cy = b.exactCenterY();
++            float r = Math.min(b.width(), b.height()) / 2f;
++            float ringW = Math.max(1.5f, r * 0.045f);
++            float rr = r - ringW - 1;
++            if (active) {
++                fill.setShader(new RadialGradient(cx, cy, rr, Color.argb(120, 255, 214, 140), Color.argb(60, 255, 200, 120),
++                        Shader.TileMode.CLAMP));
++            } else {
++                fill.setShader(new RadialGradient(cx, cy, rr, Color.argb(55, 20, 22, 26), Color.argb(95, 0, 0, 0),
++                        Shader.TileMode.CLAMP));
++            }
++            fill.setAlpha(alpha);
++            c.drawCircle(cx, cy, rr, fill);
++            ring.setShader(null);
++            ring.setStrokeWidth(ringW);
++            int tint = active ? ACCENT : softTint(style, theme);
++            ring.setColor(tint);
++            ring.setAlpha((int) (alpha * (active ? 0.95f : 0.6f)));
++            c.drawCircle(cx, cy, rr, ring);
 +        }
 +
 +        @Override
@@ -3322,6 +3446,32 @@ index 0000000..946c659
 +            float cx = b.exactCenterX(), cy = b.exactCenterY();
 +            float r = Math.min(b.width(), b.height()) / 2f;
 +            float rr = r * 0.9f;
++            if (soft) {
++                fill.setShader(null);
++                fill.setColor(Color.argb(45, 0, 0, 0));
++                fill.setAlpha((int) (alpha * 45 / 255f));
++                c.drawCircle(cx, cy, rr, fill);
++                ring.setShader(null);
++                ring.setColor(Color.WHITE);
++                ring.setAlpha((int) (alpha * 0.45f));
++                ring.setStrokeWidth(Math.max(1.5f, r * 0.03f));
++                c.drawCircle(cx, cy, rr, ring);
++                arrow.setColor(Color.WHITE);
++                arrow.setAlpha((int) (alpha * 0.45f));
++                float a = r * 0.07f, d = rr * 0.72f;
++                for (int i = 0; i < 4; i++) {
++                    c.save();
++                    c.rotate(90f * i, cx, cy);
++                    Path p = new Path();
++                    p.moveTo(cx, cy - d - a);
++                    p.lineTo(cx + a, cy - d + a * 0.4f);
++                    p.lineTo(cx - a, cy - d + a * 0.4f);
++                    p.close();
++                    c.drawPath(p, arrow);
++                    c.restore();
++                }
++                return;
++            }
 +            fill.setShader(new RadialGradient(cx, cy, rr, Color.argb(90, 60, 70, 64), Color.argb(150, 20, 26, 24),
 +                    Shader.TileMode.CLAMP));
 +            fill.setAlpha(alpha);
@@ -3380,6 +3530,13 @@ index 0000000..946c659
 +            Rect b = getBounds();
 +            float cx = b.exactCenterX(), cy = b.exactCenterY();
 +            float r = Math.min(b.width(), b.height()) / 2f * 0.92f;
++            if (soft) {
++                fill.setShader(new RadialGradient(cx, cy, r, Color.argb(200, 255, 255, 255), Color.argb(140, 230, 230, 230),
++                        Shader.TileMode.CLAMP));
++                fill.setAlpha(alpha);
++                c.drawCircle(cx, cy, r, fill);
++                return;
++            }
 +            fill.setShader(new RadialGradient(cx - r * 0.25f, cy - r * 0.3f, r * 1.3f, Color.rgb(232, 226, 210),
 +                    Color.rgb(120, 114, 100), Shader.TileMode.CLAMP));
 +            fill.setAlpha(alpha);
@@ -3422,13 +3579,13 @@ index 0000000..946c659
 +        IconView(Context ctx, int icon) {
 +            super(ctx);
 +            this.icon = icon;
-+            fill.setColor(CREAM);
-+            stroke.setColor(CREAM);
++            fill.setColor(soft ? Color.argb(240, 255, 255, 255) : CREAM);
++            stroke.setColor(soft ? Color.argb(240, 255, 255, 255) : CREAM);
 +            stroke.setStyle(Paint.Style.STROKE);
 +            stroke.setStrokeCap(Paint.Cap.ROUND);
 +            stroke.setStrokeJoin(Paint.Join.ROUND);
 +            accent.setStyle(Paint.Style.STROKE);
-+            accent.setColor(Color.rgb(40, 90, 80));
++            accent.setColor(soft ? Color.argb(150, 30, 30, 34) : Color.rgb(40, 90, 80));
 +        }
 +
 +        void setIcon(int icon) {
@@ -3444,8 +3601,9 @@ index 0000000..946c659
 +            float s = Math.min(w, h);
 +            float ox = (w - s) / 2f, oy = (h - s) / 2f;
 +            float sh = s * 0.02f;
-+            fill.setShadowLayer(s * 0.04f, 0, sh, Color.argb(160, 0, 0, 0));
-+            stroke.setShadowLayer(s * 0.04f, 0, sh, Color.argb(160, 0, 0, 0));
++            int shadow = soft ? Color.argb(90, 0, 0, 0) : Color.argb(160, 0, 0, 0);
++            fill.setShadowLayer(s * 0.04f, 0, sh, shadow);
++            stroke.setShadowLayer(s * 0.04f, 0, sh, shadow);
 +            stroke.setStrokeWidth(s * 0.075f);
 +            c.save();
 +            c.translate(ox, oy);
@@ -3730,10 +3888,10 @@ index 0000000..946c659
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
 new file mode 100644
-index 0000000..9628329
+index 0000000..57749cc
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,244 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3793,13 +3951,13 @@ index 0000000..9628329
 +        this.host = host;
 +        dim.setColor(Color.argb(150, 0, 0, 0));
 +        ring.setStyle(Paint.Style.STROKE);
-+        slot.setColor(Color.argb(170, 24, 40, 34));
++        slot.setColor(Ornate.soft ? Color.argb(45, 255, 255, 255) : Color.argb(170, 24, 40, 34));
 +        slotSel.setStyle(Paint.Style.STROKE);
-+        slotSel.setColor(Ornate.GOLD_LIGHT);
-+        text.setColor(Ornate.CREAM);
++        slotSel.setColor(Ornate.ACCENT);
++        text.setColor(Ornate.TEXT);
 +        text.setTextAlign(Paint.Align.CENTER);
-+        text.setTypeface(Typeface.create(Typeface.SERIF, Typeface.BOLD));
-+        small.setColor(Ornate.CREAM);
++        text.setTypeface(Ornate.font());
++        small.setColor(Ornate.TEXT);
 +        small.setTextAlign(Paint.Align.CENTER);
 +        small.setTypeface(Typeface.DEFAULT_BOLD);
 +    }
@@ -3837,11 +3995,16 @@ index 0000000..9628329
 +        cy = h / 2f;
 +        innerR = ringR - slotR - dp(8);
 +
-+        disc.setShader(new RadialGradient(cx, cy, ringR + slotR, Color.argb(225, 22, 44, 36), Color.argb(235, 8, 16, 14),
-+                Shader.TileMode.CLAMP));
++        if (Ornate.soft) {
++            disc.setShader(new RadialGradient(cx, cy, ringR + slotR, Color.argb(150, 18, 20, 26), Color.argb(185, 6, 8, 12),
++                    Shader.TileMode.CLAMP));
++        } else {
++            disc.setShader(new RadialGradient(cx, cy, ringR + slotR, Color.argb(225, 22, 44, 36), Color.argb(235, 8, 16, 14),
++                    Shader.TileMode.CLAMP));
++        }
 +        c.drawCircle(cx, cy, ringR + slotR + dp(8), disc);
-+        ring.setStrokeWidth(dp(3));
-+        ring.setColor(Ornate.GOLD_MID);
++        ring.setStrokeWidth(Ornate.soft ? dp(1.2f) : dp(3));
++        ring.setColor(Ornate.soft ? Color.argb(110, 255, 255, 255) : Ornate.GOLD_MID);
 +        c.drawCircle(cx, cy, ringR + slotR + dp(8), ring);
 +        ring.setStrokeWidth(dp(1));
 +        ring.setColor(Color.argb(120, 246, 222, 150));
@@ -3877,11 +4040,11 @@ index 0000000..9628329
 +        // Tabs + close
 +        tabY = cy - innerR * 0.62f;
 +        text.setTextSize(dp(15));
-+        text.setColor(masks ? Color.argb(140, 240, 232, 210) : Ornate.GOLD_LIGHT);
++        text.setColor(masks ? Color.argb(140, 240, 240, 240) : Ornate.ACCENT);
 +        c.drawText("Items", cx - innerR * 0.38f, tabY, text);
-+        text.setColor(masks ? Ornate.GOLD_LIGHT : Color.argb(140, 240, 232, 210));
++        text.setColor(masks ? Ornate.ACCENT : Color.argb(140, 240, 240, 240));
 +        c.drawText("Masks", cx + innerR * 0.38f, tabY, text);
-+        text.setColor(Ornate.CREAM);
++        text.setColor(Ornate.TEXT);
 +        closeX = Math.min(w - dp(24), cx + ringR + slotR + dp(30));
 +        closeY = Math.max(dp(24), cy - ringR - slotR + dp(4));
 +        text.setTextSize(dp(20));
@@ -5181,10 +5344,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..d2ad5ea
+index 0000000..6f1401f
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1396 @@
+@@ -0,0 +1,1404 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5908,10 +6071,17 @@ index 0000000..d2ad5ea
 +    return true;
 +}
 +
++// Area name banners ("Snowhead" etc.) and the new-cycle / owl-save screens use the message system too,
++// but they aren't conversations: no skip prompt for them.
++static bool IsBannerMode(u8 mode) {
++    return (mode >= MSGMODE_SCENE_TITLE_CARD_FADE_IN_BACKGROUND) && (mode <= MSGMODE_OWL_SAVE_1);
++}
++
 +static bool InConversation(PlayState* play) {
 +    MessageContext* msgCtx = &play->msgCtx;
-+    return (msgCtx->msgMode != MSGMODE_NONE) && (msgCtx->ocarinaMode == OCARINA_MODE_NONE) &&
-+           !play->pauseCtx.itemDescriptionOn && !play->pauseCtx.bombersNotebookOpen;
++    return (msgCtx->msgMode != MSGMODE_NONE) && !IsBannerMode(msgCtx->msgMode) &&
++           (msgCtx->ocarinaMode == OCARINA_MODE_NONE) && !play->pauseCtx.itemDescriptionOn &&
++           !play->pauseCtx.bombersNotebookOpen;
 +}
 +
 +// Skippable: story cutscenes and any conversation (it stops by itself at questions/answers).
@@ -5919,6 +6089,7 @@ index 0000000..d2ad5ea
 +    if (!BaseSkippable(play)) return false;
 +    if (InConversation(play)) return true;
 +    if (play->csCtx.state != CS_STATE_IDLE) return true;
++    if (IsBannerMode(play->msgCtx.msgMode)) return false;
 +    return (CutsceneManager_GetCurrentCsId() != CS_ID_NONE) && (play->msgCtx.msgMode == MSGMODE_NONE);
 +}
 +
