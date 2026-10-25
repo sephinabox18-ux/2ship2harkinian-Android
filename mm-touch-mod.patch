@@ -137,12 +137,135 @@ index 0000000..b6c94da
 +        return sb.toString();
 +    }
 +}
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/DpadView.java b/Android/app/src/main/java/com/twoshipfork/mm/DpadView.java
+new file mode 100644
+index 0000000..4714358
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/DpadView.java
+@@ -0,0 +1,117 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.graphics.Bitmap;
++import android.graphics.Canvas;
++import android.graphics.Color;
++import android.graphics.Paint;
++import android.graphics.RectF;
++import android.util.TypedValue;
++import android.view.MotionEvent;
++import android.view.View;
++
++/**
++ * D-pad shortcuts: four small item slots in a cross (up / left / right / down). Touching a slot holds
++ * that D-pad direction, which uses the item 2 Ship has on it. Items are put there from the item wheel.
++ */
++public class DpadView extends View {
++    interface Host {
++        Bitmap icon(int item);
++        void press(int mask, boolean down);
++        boolean editing();
++        boolean onEditTouch(MotionEvent e);
++    }
++
++    static final int N64_DUP = 0x0800, N64_DDOWN = 0x0400, N64_DLEFT = 0x0200, N64_DRIGHT = 0x0100;
++
++    private final Host host;
++    private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
++    private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final RectF rf = new RectF();
++    private int[] items = { 255, 255, 255, 255, -1, -1, -1, -1 }; // right, left, down, up, then ammo
++    private int pressedMask = 0;
++    private int pointer = -1;
++
++    public DpadView(Context c, Host host) {
++        super(c);
++        this.host = host;
++        text.setColor(Color.WHITE);
++        text.setTextAlign(Paint.Align.CENTER);
++        text.setTypeface(Ornate.font());
++    }
++
++    private float dp(float v) {
++        return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
++    }
++
++    public void setItems(int[] v) {
++        if (v == null || v.length < 8) return;
++        boolean changed = false;
++        for (int i = 0; i < 8; i++) if (v[i] != items[i]) changed = true;
++        if (changed) {
++            items = v.clone();
++            invalidate();
++        }
++    }
++
++    // slot centres: index 0 right, 1 left, 2 down, 3 up
++    private float[] centre(int i, float w, float h) {
++        float cx = w / 2f, cy = h / 2f, o = Math.min(w, h) * 0.32f;
++        switch (i) {
++            case 0: return new float[] { cx + o, cy };
++            case 1: return new float[] { cx - o, cy };
++            case 2: return new float[] { cx, cy + o };
++            default: return new float[] { cx, cy - o };
++        }
++    }
++
++    private static final int[] MASKS = { N64_DRIGHT, N64_DLEFT, N64_DDOWN, N64_DUP };
++    private static final String[] ARROWS = { "\u25B6", "\u25C0", "\u25BC", "\u25B2" };
++
++    @Override
++    protected void onDraw(Canvas c) {
++        float w = getWidth(), h = getHeight();
++        float r = Math.min(w, h) * 0.18f;
++        for (int i = 0; i < 4; i++) {
++            float[] p = centre(i, w, h);
++            Ornate.ButtonDrawable d = new Ornate.ButtonDrawable(ModTouchOverlay.STYLE_PLAIN, (pressedMask & MASKS[i]) != 0);
++            d.setBounds((int) (p[0] - r), (int) (p[1] - r), (int) (p[0] + r), (int) (p[1] + r));
++            d.draw(c);
++            Bitmap b = items[i] != 255 ? host.icon(items[i]) : null;
++            if (b != null) {
++                float ir = r * 0.68f;
++                rf.set(p[0] - ir, p[1] - ir, p[0] + ir, p[1] + ir);
++                c.drawBitmap(b, null, rf, paint);
++                if (items[4 + i] >= 0) {
++                    text.setTextSize(r * 0.55f);
++                    text.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
++                    c.drawText(String.valueOf(items[4 + i]), p[0], p[1] + r * 0.95f, text);
++                }
++            } else {
++                text.setTextSize(r * 0.6f);
++                text.setShadowLayer(dp(2), 0, dp(1), Color.argb(120, 0, 0, 0));
++                c.drawText(ARROWS[i], p[0], p[1] + r * 0.22f, text);
++            }
++        }
++    }
++
++    @Override
++    public boolean onTouchEvent(MotionEvent e) {
++        if (host.editing()) return host.onEditTouch(e);
++        int a = e.getActionMasked();
++        if (a == MotionEvent.ACTION_DOWN) {
++            float w = getWidth(), h = getHeight();
++            float dx = e.getX() - w / 2f, dy = e.getY() - h / 2f;
++            int slot = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 0 : 1) : (dy > 0 ? 2 : 3);
++            pressedMask = MASKS[slot];
++            host.press(pressedMask, true);
++            performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP);
++            invalidate();
++        } else if (a == MotionEvent.ACTION_UP || a == MotionEvent.ACTION_CANCEL) {
++            if (pressedMask != 0) host.press(pressedMask, false);
++            pressedMask = 0;
++            invalidate();
++        }
++        return true;
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..39011f3
+index 0000000..b5c2efd
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,256 @@
+@@ -0,0 +1,258 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -300,7 +423,9 @@ index 0000000..39011f3
 +                wedge.reset();
 +                wedge.moveTo(cx, cy);
 +                arc.set(cx - hs * 2, cy - hs * 2, cx + hs * 2, cy + hs * 2);
-+                wedge.arcTo(arc, -90f, 90f * quarters);
++                // what's left is the part counter-clockwise from 12 o'clock, so damage eats the heart
++                // from its right side first, like the game
++                wedge.arcTo(arc, -90f - 90f * quarters, 90f * quarters);
 +                wedge.close();
 +                c.save();
 +                c.clipPath(wedge);
@@ -400,7 +525,7 @@ index 0000000..39011f3
 +    }
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
-index fe546c8..f3eba42 100644
+index fe546c8..a5fe3b8 100644
 --- a/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/MainActivity.java
 @@ -103,6 +103,15 @@ public class MainActivity extends SDLActivity{
@@ -419,7 +544,7 @@ index fe546c8..f3eba42 100644
          applyImmersiveFullscreen();
          attachController();
      }
-@@ -955,6 +964,31 @@ public class MainActivity extends SDLActivity{
+@@ -955,6 +964,32 @@ public class MainActivity extends SDLActivity{
      // Native method for setting joystick axis value
      public native void setAxis(int axis, short value);
  
@@ -446,12 +571,13 @@ index fe546c8..f3eba42 100644
 +    public native void nativeMmEquipC(int cSlot, int invSlot);
 +    public native int[] nativeMmGetMapInfo();
 +    public native byte[] nativeMmGetMapGrid();
++    public native int[] nativeMmGetDpadItems();
 +    public native void nativeMmSetMinimap(int visible, int x, int y, int scale);
 +
      private Button button1, button2, button3, button4;
      private Button buttonA, buttonB, buttonX, buttonY;
      private Button buttonDpadUp, buttonDpadDown, buttonDpadLeft, buttonDpadRight;
-@@ -962,7 +996,8 @@ public class MainActivity extends SDLActivity{
+@@ -962,7 +997,8 @@ public class MainActivity extends SDLActivity{
      private Button buttonToggle;
      private FrameLayout leftJoystick;
      private ImageView leftJoystickKnob;
@@ -769,10 +895,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..3f0a88d
+index 0000000..748d5c0
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2446 @@
+@@ -0,0 +1,2477 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -813,13 +939,13 @@ index 0000000..3f0a88d
 +
 +    // Native actions (MMTouch.cpp)
 +    static final int ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6,
-+            ACT_TRAIL = 7, ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9;
++            ACT_TRAIL = 7, ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9, ACT_HORSE = 10;
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
-+            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024;
++            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024, ST_SWIMMING = 2048;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
-+            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10;
++            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10, KIND_DPAD = 11;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -938,6 +1064,8 @@ index 0000000..3f0a88d
 +    private Ctl hudCtl, infoCtl, minimapCtl, poundCtl, aCtl;
 +    private WheelView wheel;
 +    private MiniMapView miniMap;
++    private DpadView dpad;
++    private Ctl dpadCtl;
 +    private Ctl mapCtl;
 +    private boolean ourMap;
 +    private TextView ourMapLabel;
@@ -1054,6 +1182,9 @@ index 0000000..3f0a88d
 +        ctls.add(poundCtl);
 +        mapCtl = new Ctl("ourmap", "", "", KIND_MAPVIEW, 0, STYLE_PLAIN, 0.100f, 0.640f, 120);
 +        ctls.add(mapCtl);
++        ctls.add(new Ctl("horse", "Epona", "", KIND_ACTION, ACT_HORSE, STYLE_PLAIN, 0.560f, 0.200f, 50));
++        dpadCtl = new Ctl("dpad", "", "", KIND_DPAD, 0, STYLE_PLAIN, 0.320f, 0.300f, 110);
++        ctls.add(dpadCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
 +        // Where the stick sits in Fixed mode (only shown in Fixed mode; move/resize it in Edit controls)
 +        fixedStickCtl = new Ctl("fixedstick", "", "", KIND_STICK, 0, STYLE_PLAIN, 0.150f, 0.700f, 120);
@@ -1105,6 +1236,7 @@ index 0000000..3f0a88d
 +            if (c.kind == KIND_PANEL) buildQuestPanel(c);
 +            else if (c.kind == KIND_HUD) attachHudCtl(c);
 +            else if (c.kind == KIND_MAPVIEW) attachMapCtl(c);
++            else if (c.kind == KIND_DPAD) attachDpadCtl(c);
 +            else buildCtl(c);
 +        }
 +        marker = new MarkerView(act);
@@ -1240,6 +1372,7 @@ index 0000000..3f0a88d
 +            updateActionAndForm();
 +            updateMarker();
 +            updateMiniMap();
++            updateDpad();
 +            updatePausePanel();
 +            updateHudBar();
 +
@@ -1357,6 +1490,7 @@ index 0000000..3f0a88d
 +            case "cup": return Ornate.ICON_FAIRY;
 +            case "qsave": return Ornate.ICON_SAVE;
 +            case "wheel": return Ornate.ICON_PLUS;
++            case "horse": return Ornate.ICON_HORSE;
 +            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
@@ -1532,6 +1666,23 @@ index 0000000..3f0a88d
 +        root.addView(songsPanel, lp);
 +    }
 +
++    // ---------------------------------------------------------------- D-pad shortcuts
++    private void attachDpadCtl(Ctl c) {
++        dpad = new DpadView(act, new DpadView.Host() {
++            @Override public Bitmap icon(int item) { return iconFor(item); }
++            @Override public void press(int mask, boolean down) { touched(); act.nativeMmSetN64Button(mask, down); }
++            @Override public boolean editing() { return editing; }
++            @Override public boolean onEditTouch(MotionEvent e) { return onCtlEdit(c, e); }
++        });
++        c.view = dpad;
++        root.addView(dpad, new FrameLayout.LayoutParams(dp(c.size), dp(c.size)));
++    }
++
++    private void updateDpad() {
++        if (dpad == null || dpad.getVisibility() != View.VISIBLE) return;
++        dpad.setItems(act.nativeMmGetDpadItems());
++    }
++
 +    // ---------------------------------------------------------------- our mini-map
 +    private void attachMapCtl(Ctl c) {
 +        miniMap = new MiniMapView(act);
@@ -1558,6 +1709,7 @@ index 0000000..3f0a88d
 +                return c == null ? null : new int[] { c[0], c[1], c[2] };
 +            }
 +            @Override public void equip(int cSlot, int invSlot) { act.nativeMmEquipC(cSlot, invSlot); }
++            @Override public int[] dpadItems() { return act.nativeMmGetDpadItems(); }
 +            @Override public void close() { closeWheel(); }
 +        });
 +        wheel.setVisibility(View.GONE);
@@ -1601,7 +1753,8 @@ index 0000000..3f0a88d
 +                press(N64_A);
 +                handler.postDelayed(specialSecond, 400);
 +                break;
-+            case 2: // Zora barrier
++            case 2: // Zora barrier; in the water also hold A, so you keep swimming fast while it's up
++                if ((stateBits & ST_SWIMMING) != 0) press(N64_A);
 +                press(N64_R);
 +                break;
 +            case 3: // Deku bubble
@@ -2685,7 +2838,8 @@ index 0000000..3f0a88d
 +            if (c.kind == KIND_HUD) {
 +                continue; // laid out by layoutHudBar() (it has no text label)
 +            }
-+            if (c.kind == KIND_MAPVIEW) {
++            if (c.kind == KIND_MAPVIEW || c.kind == KIND_DPAD) {
++                if (c.kind == KIND_DPAD) c.view.setVisibility(!c.hidden || editing ? View.VISIBLE : View.GONE);
 +                int px = dp(c.size);
 +                FrameLayout.LayoutParams mlp = new FrameLayout.LayoutParams(px, px);
 +                mlp.leftMargin = (int) (c.x * w - px / 2f);
@@ -2874,6 +3028,7 @@ index 0000000..3f0a88d
 +            case KIND_HUD: return 16f;      // hearts/time bar height
 +            case KIND_MINIMAP: return 30f;
 +            case KIND_MAPVIEW: return 70f;
++            case KIND_DPAD: return 70f;
 +            case KIND_SKIP: return 28f;
 +            default: return 30f;
 +        }
@@ -2885,6 +3040,7 @@ index 0000000..3f0a88d
 +            case KIND_HUD: return 64f;
 +            case KIND_MINIMAP: return 220f;
 +            case KIND_MAPVIEW: return 260f;
++            case KIND_DPAD: return 220f;
 +            default: return 170f;
 +        }
 +    }
@@ -2916,6 +3072,7 @@ index 0000000..3f0a88d
 +            case KIND_TRAY: return "menu button";
 +            case KIND_WHEEL: return "item wheel";
 +            case KIND_MAPVIEW: return "mini-map";
++            case KIND_DPAD: return "D-pad shortcuts";
 +            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
@@ -3221,10 +3378,10 @@ index 0000000..3f0a88d
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..fa3a0b8
+index 0000000..0566b3c
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,661 @@
+@@ -0,0 +1,684 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3566,7 +3723,8 @@ index 0000000..fa3a0b8
 +    // ------------------------------------------------------------------ icons
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
-+            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16;
++            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16,
++            ICON_HORSE = 17;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -3624,6 +3782,7 @@ index 0000000..fa3a0b8
 +                case ICON_BOLT: bolt(c, s); break;
 +                case ICON_BUBBLE: bubble(c, s); break;
 +                case ICON_BEAM: beam(c, s); break;
++                case ICON_HORSE: horse(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -3754,6 +3913,27 @@ index 0000000..fa3a0b8
 +            p.moveTo(s * 0.32f, s * 0.5f);
 +            p.lineTo(s * 0.68f, s * 0.5f);
 +            c.drawPath(p, stroke);
++        }
++
++        // Epona: a horse head in profile
++        private void horse(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.62f, s * 0.14f);           // ear
++            p.lineTo(s * 0.68f, s * 0.28f);
++            p.quadTo(s * 0.86f, s * 0.42f, s * 0.84f, s * 0.6f);   // forehead to nose
++            p.quadTo(s * 0.84f, s * 0.7f, s * 0.74f, s * 0.7f);    // muzzle
++            p.lineTo(s * 0.6f, s * 0.6f);
++            p.quadTo(s * 0.5f, s * 0.62f, s * 0.46f, s * 0.86f);   // jaw / neck
++            p.lineTo(s * 0.22f, s * 0.86f);
++            p.quadTo(s * 0.24f, s * 0.42f, s * 0.52f, s * 0.24f);  // mane line
++            p.close();
++            c.drawPath(p, fill);
++            c.drawCircle(s * 0.66f, s * 0.38f, s * 0.03f, accent);
++            accent.setStrokeWidth(s * 0.03f);
++            p.reset();
++            p.moveTo(s * 0.3f, s * 0.82f);            // mane strands
++            p.quadTo(s * 0.32f, s * 0.5f, s * 0.5f, s * 0.3f);
++            c.drawPath(p, accent);
 +        }
 +
 +        // Zora barrier: lightning bolt
@@ -3888,10 +4068,10 @@ index 0000000..fa3a0b8
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
 new file mode 100644
-index 0000000..57749cc
+index 0000000..845972a
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
-@@ -0,0 +1,244 @@
+@@ -0,0 +1,281 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3920,6 +4100,7 @@ index 0000000..57749cc
 +        String name(int item);
 +        int[] inventory();       // 48 slots: 0-23 items, 24-47 masks (255 = empty)
 +        int[] cItems();          // current C button items
++        int[] dpadItems();       // D-pad shortcuts: right, left, down, up (+ ammo)
 +        void equip(int cSlot, int invSlot);
 +        void close();
 +    }
@@ -3940,6 +4121,12 @@ index 0000000..57749cc
 +    private int selected = -1;                             // index into slots
 +    private int[] inv = new int[48];
 +    private int[] cItems = { 255, 255, 255 };
++    private int[] dItems = { 255, 255, 255, 255 };
++    private final float[] dBtnX = new float[4];
++    private float dBtnY, dBtnR;
++    // shown left-to-right as  up, left, right, down ; equip slot ids 3 right, 4 left, 5 down, 6 up
++    private static final int[] D_ORDER = { 3, 1, 0, 2 };
++    private static final String[] D_ARROWS = { "\u25B2", "\u25C0", "\u25B6", "\u25BC" };
 +
 +    // geometry (computed in onDraw, reused for touch)
 +    private float cx, cy, ringR, slotR, innerR;
@@ -3972,6 +4159,8 @@ index 0000000..57749cc
 +        if (i != null && i.length >= 48) inv = i;
 +        int[] c = host.cItems();
 +        if (c != null && c.length >= 3) cItems = c;
++        int[] d = host.dpadItems();
++        if (d != null && d.length >= 4) dItems = new int[] { d[0], d[1], d[2], d[3] };
 +        slots.clear();
 +        int base = masks ? 24 : 0;
 +        for (int s = 0; s < 24; s++) {
@@ -4057,7 +4246,7 @@ index 0000000..57749cc
 +
 +        // The three C buttons to put it on
 +        cBtnR = Math.min(dp(24), innerR * 0.26f);
-+        cBtnY = cy + innerR * 0.38f;
++        cBtnY = cy + innerR * 0.22f;
 +        String[] arrows = { "\u25C0", "\u25BC", "\u25B6" };
 +        for (int i = 0; i < 3; i++) {
 +            cBtnX[i] = cx + (i - 1) * cBtnR * 2.5f;
@@ -4074,8 +4263,27 @@ index 0000000..57749cc
 +                c.drawText(arrows[i], cBtnX[i], cBtnY + cBtnR * 0.28f, small);
 +            }
 +        }
++        // D-pad shortcuts: a smaller row under the C buttons
++        dBtnR = cBtnR * 0.7f;
++        dBtnY = cBtnY + cBtnR + dBtnR + dp(8);
++        for (int k = 0; k < 4; k++) {
++            int di = D_ORDER[k];
++            dBtnX[k] = cx + (k - 1.5f) * dBtnR * 2.4f;
++            Ornate.ButtonDrawable d = new Ornate.ButtonDrawable(ModTouchOverlay.STYLE_PLAIN, false);
++            d.setBounds((int) (dBtnX[k] - dBtnR), (int) (dBtnY - dBtnR), (int) (dBtnX[k] + dBtnR), (int) (dBtnY + dBtnR));
++            d.draw(c);
++            Bitmap b = dItems[di] != 255 ? host.icon(dItems[di]) : null;
++            if (b != null) {
++                float r = dBtnR * 0.62f;
++                rf.set(dBtnX[k] - r, dBtnY - r, dBtnX[k] + r, dBtnY + r);
++                c.drawBitmap(b, null, rf, bmpPaint);
++            } else {
++                small.setTextSize(dBtnR * 0.8f);
++                c.drawText(D_ARROWS[k], dBtnX[k], dBtnY + dBtnR * 0.28f, small);
++            }
++        }
 +        small.setTextSize(dp(11));
-+        c.drawText(selected >= 0 ? "Tap a C button to equip" : "", cx, cBtnY + cBtnR + dp(14), small);
++        c.drawText(selected >= 0 ? "Tap a C button or a D-pad slot" : "", cx, cy - innerR * 0.15f + dp(18), small);
 +    }
 +
 +    @Override
@@ -4101,6 +4309,15 @@ index 0000000..57749cc
 +            if (dist(x, y, cBtnX[i], cBtnY) < cBtnR * 1.15f) {
 +                if (selected >= 0 && selected < slots.size()) {
 +                    host.equip(i, slots.get(selected));
++                    host.close();
++                }
++                return true;
++            }
++        }
++        for (int k = 0; k < 4; k++) {
++            if (dist(x, y, dBtnX[k], dBtnY) < dBtnR * 1.15f) {
++                if (selected >= 0 && selected < slots.size()) {
++                    host.equip(3 + D_ORDER[k], slots.get(selected));
 +                    host.close();
 +                }
 +                return true;
@@ -5344,10 +5561,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..6f1401f
+index 0000000..0fc6829
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1404 @@
+@@ -0,0 +1,1457 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5387,6 +5604,7 @@ index 0000000..6f1401f
 +u8* MMQuest_VisitedArray(void);
 +s32 MMQuest_GetTarget(Vec3f* out);
 +#include "z64skin_matrix.h"
++#include "z64horse.h"
 +s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
@@ -5404,6 +5622,7 @@ index 0000000..6f1401f
 +enum {
 +    ACT_JUMP = 1, ACT_SPRINT = 2, ACT_QUICKSAVE = 3, ACT_QUICKLOAD = 4, ACT_MAP = 5, ACT_SKIP = 6, ACT_TRAIL = 7,
 +    ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9, // auto-run
++    ACT_HORSE = 10,                        // call Epona
 +};
 +
 +// State bits reported to the overlay
@@ -5413,6 +5632,7 @@ index 0000000..6f1401f
 +    ST_GAMEPLAY = 1 << 8, // normal play (not paused, not in a cutscene): show the HUD bar
 +    ST_AIMING = 1 << 9,   // first-person aiming (bow, hookshot...): the overlay switches to fine aim
 +    ST_TEXT = 1 << 10,    // a conversation is on screen (skip button says "Skip text")
++    ST_SWIMMING = 1 << 11, // in the water (Zora special = fast swim + barrier together)
 +};
 +
 +// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
@@ -6338,8 +6558,8 @@ index 0000000..6f1401f
 +static void ApplyEquip(PlayState* play) {
 +    int req = sEquipReq.exchange(-1);
 +    if (req < 0) return;
-+    int cSlot = (req >> 8) & 3, inv = req & 0xFF;
-+    if (cSlot > 2 || inv >= 48) return;
++    int cSlot = (req >> 8) & 7, inv = req & 0xFF;
++    if (cSlot > 6 || inv >= 48) return;
 +    if (IS_PAUSED(&play->pauseCtx) || Play_InCsMode(play) || (play->msgCtx.msgMode != MSGMODE_NONE)) {
 +        PostMessage("Can't change items right now");
 +        return;
@@ -6352,6 +6572,23 @@ index 0000000..6f1401f
 +    else if (item == ITEM_ARROW_LIGHT) item = ITEM_BOW_LIGHT;
 +    if ((item >= ITEM_BOW_FIRE) && (item <= ITEM_BOW_LIGHT) && (INV_CONTENT(ITEM_BOW) != ITEM_BOW)) return;
 +
++    if (cSlot >= 3) {
++        // D-pad shortcut (2 Ship's D-pad items): 3 = right, 4 = left, 5 = down, 6 = up
++        s32 d = cSlot - 3;
++        u8 oldD = DPAD_BUTTON_ITEM_EQUIP(0, d), oldDSlot = DPAD_SLOT_EQUIP(0, d);
++        for (s32 o = 0; o < 4; o++) {
++            if ((o != d) && (DPAD_SLOT_EQUIP(0, o) == inv)) {
++                DPAD_BUTTON_ITEM_EQUIP(0, o) = oldD;
++                DPAD_SLOT_EQUIP(0, o) = oldDSlot;
++                if (oldD != ITEM_NONE) Interface_Dpad_LoadItemIconImpl(play, o);
++            }
++        }
++        DPAD_BUTTON_ITEM_EQUIP(0, d) = item;
++        DPAD_SLOT_EQUIP(0, d) = inv;
++        Interface_Dpad_LoadItemIconImpl(play, d);
++        Audio_PlaySfx(NA_SE_SY_DECIDE);
++        return;
++    }
 +    s32 target = EQUIP_SLOT_C_LEFT + cSlot;
 +    u8 oldItem = BUTTON_ITEM_EQUIP(0, target);
 +    u8 oldSlot = C_SLOT_EQUIP(0, target);
@@ -6433,6 +6670,20 @@ index 0000000..6f1401f
 +
 +    if (sFastTravelOpen && !IS_PAUSED(&play->pauseCtx)) FinishFastTravel(play);
 +
++    if (TakeRequest(ACT_HORSE)) {
++        Player* player = GET_PLAYER(play);
++        if (!CHECK_QUEST_ITEM(QUEST_SONG_EPONA)) {
++            PostMessage("Learn Epona's Song first");
++        } else if ((player == nullptr) || (player->transformation != PLAYER_FORM_HUMAN)) {
++            PostMessage("Epona only comes for Link in his normal form");
++        } else if (!Horse_IsValidSpawn(play->sceneId)) {
++            PostMessage("Epona can't come here");
++        } else {
++            gHorsePlayedEponasSong = true; // the same signal playing Epona's Song sends
++            Audio_PlaySfx(NA_SE_SY_DECIDE);
++            PostMessage("Calling Epona...");
++        }
++    }
 +    if (TakeRequest(ACT_SPRINT)) SetSprint(!sSprintOn);
 +    if (TakeRequest(ACT_SPRINT_ON) && !sSprintOn) SetSprint(true);
 +    if (TakeRequest(ACT_SPRINT_OFF) && sSprintOn) SetSprint(false);
@@ -6505,6 +6756,7 @@ index 0000000..6f1401f
 +        Player* player = GET_PLAYER(play);
 +        if (player != nullptr) sForm = player->transformation;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_100000)) bits |= ST_AIMING;
++        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_8000000)) bits |= ST_SWIMMING;
 +        if (InConversation(play)) bits |= ST_TEXT;
 +    }
 +    if (sSprintOn) bits |= ST_SPRINT;
@@ -6523,7 +6775,7 @@ index 0000000..6f1401f
 +
 +static void ApplyPresetOnce() {
 +    s32 version = CVarGetInteger(CVAR_PRESET_VERSION, 0);
-+    if (version >= 4) return;
++    if (version >= 5) return;
 +    if (version == 0) {
 +        CVarSetInteger("gEnhancements.Camera.FreeLook.Enable", 1);
 +        CVarSetInteger("gEnhancements.Masks.FastTransformation", 1);
@@ -6546,7 +6798,10 @@ index 0000000..6f1401f
 +    if (version < 4) {
 +        CVarSetInteger("gEnhancements.Camera.FirstPerson.RightStickEnabled", 1);
 +    }
-+    CVarSetInteger(CVAR_PRESET_VERSION, 4);
++    if (version < 5) {
++        CVarSetInteger("gEnhancements.Dpad.DpadEquips", 1); // 4 extra item shortcuts on the D-pad
++    }
++    CVarSetInteger(CVAR_PRESET_VERSION, 5);
 +    CVarSave();
 +    ShipInit::Init("*");
 +}
@@ -6682,7 +6937,22 @@ index 0000000..6f1401f
 +}
 +
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmEquipC(JNIEnv*, jobject, jint cSlot, jint inv) {
-+    if (cSlot >= 0 && cSlot <= 2 && inv >= 0 && inv < 48) sEquipReq = (cSlot << 8) | inv;
++    if (cSlot >= 0 && cSlot <= 6 && inv >= 0 && inv < 48) sEquipReq = (cSlot << 8) | inv;
++}
++
++// D-pad shortcuts: { right, left, down, up item ids, then their ammo counts (-1 none) }
++extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetDpadItems(JNIEnv* env, jobject) {
++    jint vals[8];
++    for (int i = 0; i < 4; i++) {
++        u8 item = DPAD_BUTTON_ITEM_EQUIP(0, i);
++        s32 ammo, full;
++        AmmoFor(item, &ammo, &full);
++        vals[i] = item;
++        vals[4 + i] = ammo;
++    }
++    jintArray arr = env->NewIntArray(8);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 8, vals);
++    return arr;
 +}
 +
 +extern "C" JNIEXPORT jstring JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetBreadcrumbPath(JNIEnv* env, jobject) {
@@ -6827,6 +7097,101 @@ index fa46547..92a08eb 100644
      if ((gSaveContext.respawnFlag == -4) || (gSaveContext.respawnFlag == -0x63)) {
          if (CHECK_EVENTINF(EVENTINF_TRIGGER_DAYTELOP)) {
              CLEAR_EVENTINF(EVENTINF_TRIGGER_DAYTELOP);
+diff --git a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
+index 4a1fffe..8627bef 100644
+--- a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
++++ b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
+@@ -57,11 +57,72 @@ void ObjYasi_Destroy(Actor* thisx, PlayState* play) {
+     DynaPoly_DeleteBgActor(play, &play->colCtx.dyna, this->dyna.bgId);
+ }
+ 
++// Majora's Mask touch mod: three sword hits and the palm tree falls over, then disappears.
++// Trees grow back when you leave the area and come back.
++static s32 ObjYasi_Chop(ObjYasi* this, PlayState* play) {
++    Actor* actor = &this->dyna.actor;
++    Player* player = GET_PLAYER(play);
++
++    if (this->fallTimer > 0) {
++        // falling away from Link, speeding up like a real tree
++        this->fallTimer++;
++        actor->home.rot.y = this->fallDir;
++        if (actor->shape.rot.x < 0x3C00) {
++            actor->shape.rot.x += 60 + this->fallTimer * 30;
++            if (actor->shape.rot.x >= 0x3C00) {
++                actor->shape.rot.x = 0x3C00;
++                Actor_PlaySfx(actor, NA_SE_EV_WOOD_BOUND);
++                if (Rand_ZeroOne() < 0.6f) {
++                    Vec3f drop = actor->world.pos;
++                    drop.x += Math_SinS(this->fallDir) * 250.0f;
++                    drop.z += Math_CosS(this->fallDir) * 250.0f;
++                    drop.y += 20.0f;
++                    Item_DropCollectible(play, &drop, (Rand_ZeroOne() < 0.5f) ? ITEM00_RUPEE_GREEN : ITEM00_DEKU_NUTS_1);
++                }
++            }
++        } else if (this->fallTimer > 70) {
++            Actor_Kill(actor);
++        }
++        return true;
++    }
++    if (player == NULL) return false;
++    if (this->chopCooldown > 0) this->chopCooldown--;
++    if ((player->meleeWeaponState != 0) && (this->chopCooldown == 0)) {
++        f32 radius = PALM_TREE_IS_WIDE(actor) ? 70.0f : 45.0f;
++        s32 i;
++        for (i = 0; i < 3; i++) {
++            Vec3f* tip = &player->meleeWeaponInfo[i].tip;
++            f32 dx = tip->x - actor->world.pos.x, dz = tip->z - actor->world.pos.z;
++            f32 dy = tip->y - actor->world.pos.y;
++            if ((SQ(dx) + SQ(dz) < SQ(radius)) && (dy > -20.0f) && (dy < 140.0f)) {
++                this->chopHits++;
++                this->chopCooldown = 12; // one hit per swing
++                Actor_PlaySfx(actor, NA_SE_EV_WOOD_HIT);
++                actor->home.rot.y = player->actor.shape.rot.y; // shake, like when it's rolled into
++                actor->home.rot.x = 400;
++                if (this->chopHits >= 3) {
++                    this->fallTimer = 1;
++                    this->fallDir = player->actor.shape.rot.y;
++                    actor->shape.rot.x = 0;
++                    DynaPoly_DisableCollision(play, &play->colCtx.dyna, this->dyna.bgId);
++                    Actor_PlaySfx(actor, NA_SE_EV_TREE_CUT);
++                }
++                break;
++            }
++        }
++    }
++    return false;
++}
++
+ void ObjYasi_Update(Actor* thisx, PlayState* play) {
+     ObjYasi* this = (ObjYasi*)thisx;
+     s16 temp;
+     Vec3f dropPos;
+ 
++    if (ObjYasi_Chop(this, play)) {
++        return;
++    }
++
+     if (this->dyna.actor.home.rot.z != 0) {
+         if (GameInteractor_Should(VB_TREE_DROP_COLLECTIBLE, CAN_DROP_NUT(thisx), thisx)) {
+             if (Rand_ZeroOne() < 0.5f) {
+diff --git a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
+index fc2b777..d7b96b5 100644
+--- a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
++++ b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
+@@ -7,7 +7,12 @@ struct ObjYasi;
+ 
+ typedef struct ObjYasi {
+     /* 0x000 */ DynaPolyActor dyna;
+-} ObjYasi; // size = 0x15C
++    // Majora's Mask touch mod: palm trees can be chopped down
++    s16 chopHits;
++    s16 chopCooldown;
++    s16 fallTimer;
++    s16 fallDir;
++} ObjYasi;
+ 
+ #define PALM_TREE_IS_WIDE(thisx) ((thisx)->params & 1)
+ 
 diff --git a/mm/src/overlays/actors/ovl_player_actor/z_player.c b/mm/src/overlays/actors/ovl_player_actor/z_player.c
 index 2e947e0..7bcd6c4 100644
 --- a/mm/src/overlays/actors/ovl_player_actor/z_player.c
