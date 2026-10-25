@@ -895,10 +895,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..748d5c0
+index 0000000..7892de2
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2477 @@
+@@ -0,0 +1,2582 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1129,6 +1129,7 @@ index 0000000..748d5c0
 +        ImageView icon;
 +        TextView ammo;
 +        View iconView;
++        boolean latchedPress;
 +        int shownItem = -2;
 +        float dragDx, dragDy, pinchStartDist, pinchStartSize;
 +
@@ -1160,6 +1161,11 @@ index 0000000..748d5c0
 +        markerOn = prefs.getBoolean("marker", true);
 +        fpInverted = prefs.getBoolean("fpInverted", false);
 +        ourMap = prefs.getBoolean("ourMap", true);
++        swimToggles = prefs.getBoolean("swimToggles", true);
++        swimInvert = prefs.getBoolean("swimInvert", false);
++        optionalStealth = prefs.getBoolean("optionalStealth", true);
++        treeChop = prefs.getBoolean("treeChop", true);
++        smoothSteer = prefs.getBoolean("smoothSteer", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -1265,6 +1271,10 @@ index 0000000..748d5c0
 +        act.nativeMmSetOption(3, instantDoors ? 1 : 0);
 +        act.nativeMmSetOption(4, fpInverted ? 1 : 0);
 +        act.nativeMmSetOption(5, ourMap ? 1 : 0);
++        act.nativeMmSetOption(6, optionalStealth ? 1 : 0);
++        act.nativeMmSetOption(7, swimInvert ? 1 : 0);
++        act.nativeMmSetOption(8, treeChop ? 1 : 0);
++        act.nativeMmSetOption(9, smoothSteer ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -1370,6 +1380,7 @@ index 0000000..748d5c0
 +
 +            updateCIcons();
 +            updateActionAndForm();
++            checkLatches();
 +            updateMarker();
 +            updateMiniMap();
 +            updateDpad();
@@ -2466,6 +2477,36 @@ index 0000000..748d5c0
 +            prefs.edit().putBoolean("autoRun", autoRun).apply();
 +            refreshSettings();
 +        });
++        swimToggleLabel = settingsRow(settingsPanel, "Swim buttons", null, null, "Change", () -> {
++            swimToggles = !swimToggles;
++            prefs.edit().putBoolean("swimToggles", swimToggles).apply();
++            releaseAll();
++            refreshSettings();
++        });
++        swimInvertLabel = settingsRow(settingsPanel, "Swim up/down", null, null, "Change", () -> {
++            swimInvert = !swimInvert;
++            prefs.edit().putBoolean("swimInvert", swimInvert).apply();
++            act.nativeMmSetOption(7, swimInvert ? 1 : 0);
++            refreshSettings();
++        });
++        steerLabel = settingsRow(settingsPanel, "Swim & riding turns", null, null, "Change", () -> {
++            smoothSteer = !smoothSteer;
++            prefs.edit().putBoolean("smoothSteer", smoothSteer).apply();
++            act.nativeMmSetOption(9, smoothSteer ? 1 : 0);
++            refreshSettings();
++        });
++        stealthLabel = settingsRow(settingsPanel, "Stealth sections", null, null, "Change", () -> {
++            optionalStealth = !optionalStealth;
++            prefs.edit().putBoolean("optionalStealth", optionalStealth).apply();
++            act.nativeMmSetOption(6, optionalStealth ? 1 : 0);
++            refreshSettings();
++        });
++        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
++            treeChop = !treeChop;
++            prefs.edit().putBoolean("treeChop", treeChop).apply();
++            act.nativeMmSetOption(8, treeChop ? 1 : 0);
++            refreshSettings();
++        });
 +        ourMapLabel = settingsRow(settingsPanel, "Mini-map", null, null, "Change", () -> {
 +            ourMap = !ourMap;
 +            prefs.edit().putBoolean("ourMap", ourMap).apply();
@@ -2564,6 +2605,11 @@ index 0000000..748d5c0
 +        markerLabel.setText(markerOn ? "On" : "Off");
 +        ourMapLabel.setText(ourMap ? "Clean map" : "Game's map");
 +        styleLabel.setText(softStyle ? "Soft" : "Zelda gold");
++        swimToggleLabel.setText(swimToggles ? "Tap on/off" : "Hold");
++        swimInvertLabel.setText(swimInvert ? "Inverted" : "Normal");
++        steerLabel.setText(smoothSteer ? "Smooth" : "Original");
++        stealthLabel.setText(optionalStealth ? "Fight back" : "Thrown out");
++        treeLabel.setText(treeChop ? "On" : "Off");
 +        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
@@ -2965,7 +3011,50 @@ index 0000000..748d5c0
 +        handler.postDelayed(() -> act.nativeMmSetN64Button(mask, false), 120);
 +    }
 +
++    // ---- swim toggles: latched buttons stay held until tapped again or you leave the water
++    private boolean swimToggles = true, latchSwim = false, latchPower = false;
++    private int latchedMask = 0;
++    private long notSwimmingSince = 0;
++    private TextView swimToggleLabel, swimInvertLabel, stealthLabel, treeLabel, steerLabel;
++    private boolean swimInvert, optionalStealth, treeChop, smoothSteer;
++
++    private void applyLatches() {
++        int want = (latchSwim ? N64_A : 0) | (latchPower ? (N64_A | N64_R) : 0);
++        for (int m : new int[] { N64_A, N64_R }) {
++            boolean on = (want & m) != 0, was = (latchedMask & m) != 0;
++            if (on != was) act.nativeMmSetN64Button(m, on);
++        }
++        latchedMask = want;
++        refreshLatchGlow();
++    }
++
++    private void refreshLatchGlow() {
++        if (aCtl != null) aCtl.view.setBackground(styleFor(aCtl, latchSwim));
++        if (poundCtl != null && poundCtl.view != null) poundCtl.view.setBackground(styleFor(poundCtl, latchPower));
++    }
++
++    private void checkLatches() {
++        if (!latchSwim && !latchPower) return;
++        boolean swimming = (stateBits & ST_SWIMMING) != 0 && !menuMode && (stateBits & ST_PAUSED) == 0;
++        long now = System.currentTimeMillis();
++        if (swimming) {
++            notSwimmingSince = 0;
++        } else if (notSwimmingSince == 0) {
++            notSwimmingSince = now;
++        }
++        // out of the water for a moment (not just a leap), or no longer Zora: let go
++        if ((notSwimmingSince != 0 && now - notSwimmingSince > 700) || (latchPower && form != 2)) {
++            latchSwim = false;
++            latchPower = false;
++            notSwimmingSince = 0;
++            applyLatches();
++        }
++    }
++
 +    private void releaseAll() {
++        latchSwim = false;
++        latchPower = false;
++        if (latchedMask != 0) applyLatches();
 +        for (Ctl c : ctls) {
 +            if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
 +        }
@@ -3000,6 +3089,17 @@ index 0000000..748d5c0
 +            case MotionEvent.ACTION_DOWN:
 +                setPressed(c, true);
 +                c.view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
++                // In the water the swim button (A) and the Zora power swim (Special) are on/off toggles,
++                // so your thumbs are free for the stick and camera.
++                if (swimToggles && (stateBits & ST_SWIMMING) != 0
++                        && ((c.kind == KIND_N64 && c.value == N64_A) || (c.kind == KIND_POUND && form == 2))) {
++                    if (c.kind == KIND_POUND) latchPower = !latchPower;
++                    else latchSwim = !latchSwim;
++                    c.latchedPress = true;
++                    applyLatches();
++                    return true;
++                }
++                c.latchedPress = false;
 +                switch (c.kind) {
 +                    case KIND_WHEEL: openWheel(); break;
 +                    case KIND_POUND: startPound(); break;
@@ -3012,6 +3112,11 @@ index 0000000..748d5c0
 +            case MotionEvent.ACTION_UP:
 +            case MotionEvent.ACTION_CANCEL:
 +                setPressed(c, false);
++                if (c.latchedPress) {
++                    c.latchedPress = false;
++                    refreshLatchGlow();
++                    return true; // a toggle: nothing to release
++                }
 +                if (c.kind == KIND_N64) act.nativeMmSetN64Button(c.value, false);
 +                if (c.kind == KIND_POUND) stopPound();
 +                return true;
@@ -5561,10 +5666,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..0fc6829
+index 0000000..6387963
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1457 @@
+@@ -0,0 +1,1661 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5605,6 +5710,7 @@ index 0000000..0fc6829
 +s32 MMQuest_GetTarget(Vec3f* out);
 +#include "z64skin_matrix.h"
 +#include "z64horse.h"
++#include "gfx.h"
 +s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
@@ -6552,6 +6658,196 @@ index 0000000..0fc6829
 +    sMapInfo.insert(sMapInfo.end(), marks.begin(), marks.end());
 +}
 +
++// ---------------------------------------------------------------- chopping down trees
++// Three sword hits and a tree is cut at the base: it tips over away from Link, lies there a moment,
++// then is gone, leaving a stump. Trees grow back when you leave the area and come back.
++struct TreeState {
++    s16 hits = 0;
++    s16 cooldown = 0;
++    s16 fallTimer = 0;
++    s16 dir = 0;
++    f32 stumpRadius = 30.0f;
++};
++static std::map<Actor*, TreeState> sTrees;
++static s32 sTreeScene = -1;
++static std::atomic<int> sTreeChop{ 1 };
++
++static bool IsChoppableTree(Actor* a) {
++    if (a->id == ACTOR_OBJ_YASI || a->id == ACTOR_OBJ_TREE) return true;
++    if (a->id == ACTOR_EN_WOOD02) return (a->params & 0xFF) < 0x0B; // trees only, not bushes
++    return false;
++}
++
++static f32 TreeHitRadius(Actor* a) {
++    if (a->id == ACTOR_OBJ_YASI) return (a->params & 1) ? 70.0f : 45.0f;
++    if (a->id == ACTOR_OBJ_TREE) return 80.0f;
++    return 50.0f;
++}
++
++// A simple octagonal stump: bark sides, light rings on top. Unit size, scaled when drawn.
++static Vtx sStumpVtx[18];
++static Gfx sStumpDL[20];
++static bool sStumpBuilt = false;
++
++static void BuildStump() {
++    if (sStumpBuilt) return;
++    sStumpBuilt = true;
++    for (int i = 0; i < 8; i++) {
++        f32 a = i * (2.0f * M_PI / 8.0f);
++        s16 x = (s16)(cosf(a) * 100.0f), z = (s16)(sinf(a) * 100.0f);
++        sStumpVtx[i] = (Vtx)VTX(x, 0, z, 0, 0, 92, 58, 34, 255);          // bottom ring (bark, darker)
++        sStumpVtx[8 + i] = (Vtx)VTX(x, 100, z, 0, 0, 196, 154, 104, 255); // top ring (cut wood)
++    }
++    sStumpVtx[16] = (Vtx)VTX(0, 102, 0, 0, 0, 150, 110, 70, 255);        // top centre (darker heart)
++    sStumpVtx[17] = (Vtx)VTX(0, 0, 0, 0, 0, 92, 58, 34, 255);
++    Gfx* g = sStumpDL;
++    gSPVertex(g++, (uintptr_t)sStumpVtx, 17, 0);
++    for (int i = 0; i < 8; i += 2) {
++        int j = (i + 1) % 8, k = (i + 2) % 8;
++        gSP2Triangles(g++, i, j, 8 + j, 0, i, 8 + j, 8 + i, 0); // sides
++        gSP2Triangles(g++, j, k, 8 + k, 0, j, 8 + k, 8 + j, 0);
++    }
++    for (int i = 0; i < 8; i += 2) {
++        gSP2Triangles(g++, 8 + i, 16, 8 + (i + 1) % 8, 0, 8 + (i + 1) % 8, 16, 8 + (i + 2) % 8, 0); // top
++    }
++    gSPEndDisplayList(g++);
++}
++
++extern "C" void MMMod_DrawStump(Actor* actor, PlayState* play) {
++    auto it = sTrees.find(actor);
++    f32 r = (it != sTrees.end()) ? it->second.stumpRadius : 30.0f;
++    BuildStump();
++    OPEN_DISPS(play->state.gfxCtx);
++    Gfx_SetupDL25_Opa(play->state.gfxCtx);
++    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
++    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
++    Matrix_Translate(actor->world.pos.x, actor->world.pos.y, actor->world.pos.z, MTXMODE_NEW);
++    Matrix_Scale(r / 100.0f, r * 0.7f / 100.0f, r / 100.0f, MTXMODE_APPLY);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    gSPDisplayList(POLY_OPA_DISP++, sStumpDL);
++    CLOSE_DISPS(play->state.gfxCtx);
++}
++
++// Replaces the tree's own update once it's been cut: the fall, then the stump (no collision).
++extern "C" void MMMod_FallingTreeUpdate(Actor* actor, PlayState* play) {
++    auto it = sTrees.find(actor);
++    if (it == sTrees.end()) return;
++    TreeState& t = it->second;
++    if (actor->draw == MMMod_DrawStump) return; // already a stump
++    t.fallTimer++;
++    s16 angle = (actor->id == ACTOR_OBJ_YASI) ? actor->shape.rot.x : actor->shape.rot.x;
++    if (angle < 0x3C00) {
++        angle += 60 + t.fallTimer * 28;
++        if (angle >= 0x3C00) {
++            angle = 0x3C00;
++            Actor_PlaySfx(actor, NA_SE_EV_WOOD_BOUND);
++            if (Rand_ZeroOne() < 0.5f) {
++                Vec3f drop = actor->world.pos;
++                drop.x += Math_SinS(t.dir) * 200.0f;
++                drop.z += Math_CosS(t.dir) * 200.0f;
++                drop.y += 20.0f;
++                Item_DropCollectible(play, &drop, (Rand_ZeroOne() < 0.5f) ? ITEM00_RUPEE_GREEN : ITEM00_DEKU_NUTS_1);
++            }
++        }
++        actor->shape.rot.x = angle;
++        if (actor->id == ACTOR_OBJ_YASI) {
++            actor->home.rot.y = t.dir; // the palm tree draws its lean around home.rot.y
++        } else {
++            actor->shape.rot.y = t.dir;
++            actor->shape.rot.z = 0;
++        }
++    } else if (t.fallTimer > 75) {
++        actor->draw = MMMod_DrawStump; // the trunk is gone; the stump stays
++        actor->shape.rot.x = 0;
++    }
++}
++
++static void UpdateTreeChopping(PlayState* play) {
++    if (play->sceneId != sTreeScene) {
++        sTrees.clear();
++        sTreeScene = play->sceneId;
++    }
++    if (!sTreeChop.load()) return;
++    Player* player = GET_PLAYER(play);
++    if (player == nullptr) return;
++    bool swinging = player->meleeWeaponState != 0;
++    for (Actor* a = play->actorCtx.actorLists[ACTORCAT_PROP].first; a != nullptr; a = a->next) {
++        if (!IsChoppableTree(a)) continue;
++        if (a->update == MMMod_FallingTreeUpdate) continue;
++        auto it = sTrees.find(a);
++        if (it != sTrees.end() && it->second.cooldown > 0) it->second.cooldown--;
++        if (!swinging) continue;
++        f32 radius = TreeHitRadius(a);
++        if (Math_Vec3f_DistXZ(&player->actor.world.pos, &a->world.pos) > radius + 150.0f) continue;
++        for (s32 i = 0; i < 3; i++) {
++            Vec3f* tip = &player->meleeWeaponInfo[i].tip;
++            f32 dx = tip->x - a->world.pos.x, dz = tip->z - a->world.pos.z, dy = tip->y - a->world.pos.y;
++            if ((dx * dx + dz * dz < radius * radius) && (dy > -20.0f) && (dy < 160.0f)) {
++                TreeState& t = sTrees[a];
++                if (t.cooldown > 0) break;
++                t.hits++;
++                t.cooldown = 12; // one hit per swing
++                Actor_PlaySfx(a, NA_SE_EV_WOOD_HIT);
++                if (t.hits >= 3) {
++                    t.dir = player->actor.shape.rot.y;
++                    t.stumpRadius = radius * 0.6f;
++                    a->shape.rot.x = 0;
++                    if (a->id == ACTOR_OBJ_YASI || a->id == ACTOR_OBJ_TREE) {
++                        DynaPoly_DisableCollision(play, &play->colCtx.dyna, ((DynaPolyActor*)a)->bgId);
++                    }
++                    a->flags &= ~ACTOR_FLAG_ATTENTION_ENABLED;
++                    a->update = MMMod_FallingTreeUpdate; // its own logic (and collision) stops
++                    Actor_PlaySfx(a, NA_SE_EV_TREE_CUT);
++                    Crumb("tree chopped");
++                }
++                break;
++            }
++        }
++    }
++}
++
++// ---------------------------------------------------------------- smoother swimming and horse steering
++// Swimming and riding normally turn slowly towards the stick. This turns them towards where the stick
++// points (relative to the camera) as briskly as Link turns on foot.
++static std::atomic<int> sSmoothSteer{ 1 };
++
++static void SmoothSteering(PlayState* play) {
++    if (!sSmoothSteer.load() || Player_InCsMode(play) || (play->msgCtx.msgMode != MSGMODE_NONE)) return;
++    Player* p = GET_PLAYER(play);
++    if (p == nullptr) return;
++    f32 mag;
++    s16 angle;
++    Lib_GetControlStickData(&mag, &angle, CONTROLLER1(&play->state));
++    if (mag < 12.0f) return;
++    s16 target = Camera_GetInputDirYaw(GET_ACTIVE_CAM(play)) + angle;
++
++    if ((p->stateFlags1 & PLAYER_STATE1_800000) && (p->rideActor != nullptr)) {
++        Actor* horse = p->rideActor; // Epona
++        Math_ScaledStepToS(&horse->world.rot.y, target, 0x300);
++        horse->shape.rot.y = horse->world.rot.y;
++    } else if ((p->stateFlags1 & PLAYER_STATE1_8000000) && (p->currentBoots != PLAYER_BOOTS_ZORA_UNDERWATER) &&
++               !(p->stateFlags1 & PLAYER_STATE1_100000)) {
++        Math_ScaledStepToS(&p->yaw, target, 0x600);
++        p->actor.shape.rot.y = p->yaw;
++    }
++}
++
++// ---------------------------------------------------------------- optional stealth (used by guard actors)
++static std::atomic<int> sOptionalStealth{ 1 };
++
++extern "C" s32 MMMod_OptionalStealth(void) {
++    return sOptionalStealth.load();
++}
++
++// ---------------------------------------------------------------- swimming: invert up/down underwater
++static std::atomic<int> sInvertSwim{ 0 };
++static std::atomic<int> sUnderwater{ 0 };
++
++// Called by padmgr.c for controller 1 after touch buttons are added
++extern "C" void MMMod_AdjustStick(s8* stickY) {
++    if (sInvertSwim.load() && sUnderwater.load()) *stickY = (*stickY == -128) ? 127 : -*stickY;
++}
++
 +// ---------------------------------------------------------------- item/mask wheel: equip to a C button
 +static std::atomic<int> sEquipReq{ -1 }; // (cSlot << 8) | inventory slot
 +
@@ -6751,6 +7047,15 @@ index 0000000..0fc6829
 +    if (sPausePage >= 0) bits |= ST_PAUSE_GRID;
 +    UpdateMarker(play);
 +    UpdateMiniMap(play);
++    UpdateTreeChopping(play);
++    SmoothSteering(play);
++    {
++        Player* p = GET_PLAYER(play);
++        // Zora swimming underwater: up/down on the stick steers the depth (only there, so surface
++        // swimming and walking are never affected)
++        sUnderwater = (p != nullptr) && (p->stateFlags1 & PLAYER_STATE1_8000000) &&
++                      (p->currentBoots == PLAYER_BOOTS_ZORA_UNDERWATER);
++    }
 +    sAAction = play->interfaceCtx.aButtonDoAction;
 +    {
 +        Player* player = GET_PLAYER(play);
@@ -7007,6 +7312,10 @@ index 0000000..0fc6829
 +    if (option == 2) sModernHud = value;
 +    if (option == 3) sInstantDoors = value;
 +    if (option == 4) sFpInvertReq = value; // first-person aiming: 1 = inverted up/down
++    if (option == 6) sOptionalStealth = value; // 1 = guards strike instead of throwing Link out
++    if (option == 7) sInvertSwim = value;      // 1 = invert up/down while swimming underwater
++    if (option == 8) sTreeChop = value;        // 1 = trees can be chopped down
++    if (option == 9) sSmoothSteer = value;     // 1 = smoother swimming / horse steering
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
 +        sOurMap = value;
 +        sMinimapReq = 1;
@@ -7023,20 +7332,21 @@ index 0000000..0fc6829
 +}
 +#endif
 diff --git a/mm/src/code/padmgr.c b/mm/src/code/padmgr.c
-index f0e57da..9b9d94f 100644
+index f0e57da..baa4dae 100644
 --- a/mm/src/code/padmgr.c
 +++ b/mm/src/code/padmgr.c
-@@ -441,6 +441,9 @@ void PadMgr_AdjustInput(Input* input) {
+@@ -441,6 +441,10 @@ void PadMgr_AdjustInput(Input* input) {
  /**
   * Updates `sPadMgrInstance->inputs` based on the error response of each controller
   */
 +u32 MMMod_TouchButtons(void);
++void MMMod_AdjustStick(s8* stickY);
 +extern volatile s32 gMmTouchOverlayActive;
 +
  void PadMgr_UpdateInputs(void) {
      s32 diff;
      Input* input = &sPadMgrInstance->inputs[0];
-@@ -490,6 +493,13 @@ void PadMgr_UpdateInputs(void) {
+@@ -490,6 +494,14 @@ void PadMgr_UpdateInputs(void) {
              input->cur.err_no = pad->err_no;
          }
  
@@ -7045,6 +7355,7 @@ index f0e57da..9b9d94f 100644
 +        if ((i == 0) && gMmTouchOverlayActive) {
 +            input->cur.button &= ~(BTN_CUP | BTN_CDOWN | BTN_CLEFT | BTN_CRIGHT);
 +            input->cur.button |= MMMod_TouchButtons();
++            MMMod_AdjustStick(&input->cur.stick_y);
 +        }
 +
          // If opposed directions on the D-Pad are pressed at the same time, mask both out
@@ -7097,101 +7408,204 @@ index fa46547..92a08eb 100644
      if ((gSaveContext.respawnFlag == -4) || (gSaveContext.respawnFlag == -0x63)) {
          if (CHECK_EVENTINF(EVENTINF_TRIGGER_DAYTELOP)) {
              CLEAR_EVENTINF(EVENTINF_TRIGGER_DAYTELOP);
-diff --git a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
-index 4a1fffe..8627bef 100644
---- a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
-+++ b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.c
-@@ -57,11 +57,72 @@ void ObjYasi_Destroy(Actor* thisx, PlayState* play) {
-     DynaPoly_DeleteBgActor(play, &play->colCtx.dyna, this->dyna.bgId);
- }
+diff --git a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
+index 978a56f..49b92db 100644
+--- a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
++++ b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
+@@ -20,6 +20,8 @@ void EnGe2_Walk(EnGe2* this, PlayState* play);
+ void EnGe2_GuardStationary(EnGe2* this, PlayState* play);
  
-+// Majora's Mask touch mod: three sword hits and the palm tree falls over, then disappears.
-+// Trees grow back when you leave the area and come back.
-+static s32 ObjYasi_Chop(ObjYasi* this, PlayState* play) {
-+    Actor* actor = &this->dyna.actor;
-+    Player* player = GET_PLAYER(play);
-+
-+    if (this->fallTimer > 0) {
-+        // falling away from Link, speeding up like a real tree
-+        this->fallTimer++;
-+        actor->home.rot.y = this->fallDir;
-+        if (actor->shape.rot.x < 0x3C00) {
-+            actor->shape.rot.x += 60 + this->fallTimer * 30;
-+            if (actor->shape.rot.x >= 0x3C00) {
-+                actor->shape.rot.x = 0x3C00;
-+                Actor_PlaySfx(actor, NA_SE_EV_WOOD_BOUND);
-+                if (Rand_ZeroOne() < 0.6f) {
-+                    Vec3f drop = actor->world.pos;
-+                    drop.x += Math_SinS(this->fallDir) * 250.0f;
-+                    drop.z += Math_CosS(this->fallDir) * 250.0f;
-+                    drop.y += 20.0f;
-+                    Item_DropCollectible(play, &drop, (Rand_ZeroOne() < 0.5f) ? ITEM00_RUPEE_GREEN : ITEM00_DEKU_NUTS_1);
-+                }
-+            }
-+        } else if (this->fallTimer > 70) {
-+            Actor_Kill(actor);
-+        }
-+        return true;
+ s32 EnGe2_ValidatePictograph(PlayState* play, Actor* thisx);
++void EnGe2_SetupLookAround(EnGe2* this);
++s32 MMMod_OptionalStealth(void);
+ 
+ ActorProfile En_Ge2_Profile = {
+     /**/ ACTOR_EN_GE2,
+@@ -366,9 +368,30 @@ void EnGe2_Scream(EnGe2* this) {
+ /**
+  * Wait for timer to finish, then set up the captured/thrown out transition.
+  */
++// Majora's Mask touch mod: instead of throwing Link out, the guard strikes him (half a heart and a
++// knockback), then goes back to her rounds and won't spot him again for a few seconds.
++static void EnGe2_StrikePlayer(EnGe2* this, PlayState* play) {
++    if (play->msgCtx.msgMode != MSGMODE_NONE) {
++        Message_CloseTextbox(play);
 +    }
-+    if (player == NULL) return false;
-+    if (this->chopCooldown > 0) this->chopCooldown--;
-+    if ((player->meleeWeaponState != 0) && (this->chopCooldown == 0)) {
-+        f32 radius = PALM_TREE_IS_WIDE(actor) ? 70.0f : 45.0f;
-+        s32 i;
-+        for (i = 0; i < 3; i++) {
-+            Vec3f* tip = &player->meleeWeaponInfo[i].tip;
-+            f32 dx = tip->x - actor->world.pos.x, dz = tip->z - actor->world.pos.z;
-+            f32 dy = tip->y - actor->world.pos.y;
-+            if ((SQ(dx) + SQ(dz) < SQ(radius)) && (dy > -20.0f) && (dy < 140.0f)) {
-+                this->chopHits++;
-+                this->chopCooldown = 12; // one hit per swing
-+                Actor_PlaySfx(actor, NA_SE_EV_WOOD_HIT);
-+                actor->home.rot.y = player->actor.shape.rot.y; // shake, like when it's rolled into
-+                actor->home.rot.x = 400;
-+                if (this->chopHits >= 3) {
-+                    this->fallTimer = 1;
-+                    this->fallDir = player->actor.shape.rot.y;
-+                    actor->shape.rot.x = 0;
-+                    DynaPoly_DisableCollision(play, &play->colCtx.dyna, this->dyna.bgId);
-+                    Actor_PlaySfx(actor, NA_SE_EV_TREE_CUT);
-+                }
-+                break;
-+            }
-+        }
++    Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_END);
++    func_800B8D50(play, &this->picto.actor, 9.0f, this->picto.actor.yawTowardsPlayer, 6.0f, 8);
++    EnGe2_Scream(this);
++    CLEAR_WEEKEVENTREG(WEEKEVENTREG_80_08);
++    this->stateFlags &= ~GERUDO_PURPLE_STATE_CAPTURING;
++    this->mmCooldown = 200; // ~10 seconds
++    if (this->mmWasStationary) {
++        this->actionFunc = EnGe2_GuardStationary;
++    } else {
++        EnGe2_SetupLookAround(this);
 +    }
-+    return false;
 +}
 +
- void ObjYasi_Update(Actor* thisx, PlayState* play) {
-     ObjYasi* this = (ObjYasi*)thisx;
-     s16 temp;
-     Vec3f dropPos;
+ void EnGe2_ThrowPlayerOut(EnGe2* this, PlayState* play) {
+     if (this->timer > 0) {
+         this->timer--;
++    } else if (MMMod_OptionalStealth()) {
++        EnGe2_StrikePlayer(this, play);
+     } else if (play->nextEntrance != play->setupExitList[GERUDO_PURPLE_GET_EXIT(&this->picto.actor)]) {
+         play->nextEntrance = play->setupExitList[GERUDO_PURPLE_GET_EXIT(&this->picto.actor)];
+         play->transitionTrigger = TRANS_TRIGGER_START;
+@@ -488,7 +511,8 @@ void EnGe2_PatrolDuties(EnGe2* this, PlayState* play) {
+         this->actionFunc = EnGe2_TurnToPlayerFast;
+         Animation_Change(&this->skelAnime, &gGerudoPurpleLookingAboutAnim, 1.0f, 0.0f,
+                          Animation_GetLastFrame(&gGerudoPurpleLookingAboutAnim), ANIMMODE_LOOP, -8.0f);
+-    } else if (EnGe2_LookForPlayer(play, &this->picto.actor, &this->picto.actor.focus.pos,
++    } else if ((this->mmCooldown == 0) &&
++               EnGe2_LookForPlayer(play, &this->picto.actor, &this->picto.actor.focus.pos,
+                                    this->picto.actor.shape.rot.y, 0x1800, visionRange, this->verticalDetectRange)) {
+         if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
+             this->picto.actor.speed = 0.0f;
+@@ -677,7 +701,9 @@ void EnGe2_PerformCutsceneActions(EnGe2* this, PlayState* play) {
+ // Used for those on boats
+ void EnGe2_GuardStationary(EnGe2* this, PlayState* play) {
+     SkelAnime_Update(&this->skelAnime);
+-    if (EnGe2_LookForPlayer(play, &this->picto.actor, &this->picto.actor.focus.pos, this->picto.actor.shape.rot.y,
++    this->mmWasStationary = true;
++    if ((this->mmCooldown == 0) &&
++        EnGe2_LookForPlayer(play, &this->picto.actor, &this->picto.actor.focus.pos, this->picto.actor.shape.rot.y,
+                             0x4000, 720.0f, this->verticalDetectRange)) {
+         if ((GERUDO_PURPLE_GET_EXIT(&this->picto.actor) != GERUDO_PURPLE_EXIT_NONE) && !Play_InCsMode(play)) {
+             Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_26);
+@@ -699,6 +725,10 @@ void EnGe2_Update(Actor* thisx, PlayState* play) {
+     s32 pad;
+     EnGe2* this = (EnGe2*)thisx;
  
-+    if (ObjYasi_Chop(this, play)) {
-+        return;
++    if (this->mmCooldown > 0) {
++        this->mmCooldown--;
 +    }
 +
-     if (this->dyna.actor.home.rot.z != 0) {
-         if (GameInteractor_Should(VB_TREE_DROP_COLLECTIBLE, CAN_DROP_NUT(thisx), thisx)) {
-             if (Rand_ZeroOne() < 0.5f) {
-diff --git a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
-index fc2b777..d7b96b5 100644
---- a/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
-+++ b/mm/src/overlays/actors/ovl_Obj_Yasi/z_obj_yasi.h
-@@ -7,7 +7,12 @@ struct ObjYasi;
+     if (!(this->stateFlags & GERUDO_PURPLE_STATE_DISABLE_MOVEMENT)) {
+         Actor_MoveWithGravity(&this->picto.actor);
+     }
+diff --git a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.h b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.h
+index ee0d99d..a03fec7 100644
+--- a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.h
++++ b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.h
+@@ -55,6 +55,9 @@ typedef struct EnGe2 {
+     /* 0x304 */ s16 unk304; // unused
+     /* 0x306 */ s16 screamTimer;
+     /* 0x308 */ EnGe2ActionFunc actionFunc;
+-} EnGe2; // size = 0x30C
++    // Majora's Mask touch mod: optional stealth
++    s16 mmCooldown;     // frames before this guard can spot Link again
++    u8 mmWasStationary; // boat guards go back to standing watch
++} EnGe2;
  
- typedef struct ObjYasi {
-     /* 0x000 */ DynaPolyActor dyna;
--} ObjYasi; // size = 0x15C
-+    // Majora's Mask touch mod: palm trees can be chopped down
-+    s16 chopHits;
-+    s16 chopCooldown;
-+    s16 fallTimer;
-+    s16 fallDir;
-+} ObjYasi;
+ #endif // Z_EN_GE2_H
+diff --git a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
+index 7079b26..ed8334d 100644
+--- a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
++++ b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.c
+@@ -198,12 +198,25 @@ void EnGe3_Idle(EnGe3* this, PlayState* play) {
+     }
+ }
  
- #define PALM_TREE_IS_WIDE(thisx) ((thisx)->params & 1)
++s32 MMMod_OptionalStealth(void);
++
+ void EnGe3_ThrowPlayerOut(EnGe3* this, PlayState* play) {
+     SkelAnime_Update(&this->skelAnime);
+     Math_SmoothStepToS(&this->picto.actor.shape.rot.y, this->picto.actor.yawTowardsPlayer, 2, 0x400, 0x100);
  
+     if (this->actionTimer > 0) {
+         this->actionTimer--;
++    } else if (MMMod_OptionalStealth()) {
++        // Majora's Mask touch mod: a hit and a knockback instead of being thrown out
++        if (play->msgCtx.msgMode != MSGMODE_NONE) {
++            Message_CloseTextbox(play);
++        }
++        Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_END);
++        func_800B8D50(play, &this->picto.actor, 9.0f, this->picto.actor.yawTowardsPlayer, 6.0f, 8);
++        EnGe3_Scream(this);
++        CLEAR_WEEKEVENTREG(WEEKEVENTREG_80_08);
++        this->mmNoDetect = true;
++        this->actionFunc = EnGe3_AveilsChamberIdle;
+     } else if (play->nextEntrance != play->setupExitList[GERUDO_AVEIL_GET_EXIT(&this->picto.actor)]) {
+         play->nextEntrance = play->setupExitList[GERUDO_AVEIL_GET_EXIT(&this->picto.actor)];
+         play->transitionTrigger = TRANS_TRIGGER_START;
+@@ -271,8 +284,8 @@ void EnGe3_AveilsChamberIdle(EnGe3* this, PlayState* play) {
+ 
+             SkelAnime_Update(&this->skelAnime);
+         }
+-    } else if ((this->picto.actor.xzDistToPlayer < 700.0f) && (fabsf(this->picto.actor.playerHeightRel) < 100.0f) &&
+-               !Play_InCsMode(play)) {
++    } else if (!this->mmNoDetect && (this->picto.actor.xzDistToPlayer < 700.0f) &&
++               (fabsf(this->picto.actor.playerHeightRel) < 100.0f) && !Play_InCsMode(play)) {
+         Player_SetCsActionWithHaltedActors(play, &this->picto.actor, PLAYER_CSACTION_26);
+         Lib_PlaySfx(NA_SE_SY_FOUND);
+ 
+diff --git a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.h b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.h
+index f2611e4..b3f5e9a 100644
+--- a/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.h
++++ b/mm/src/overlays/actors/ovl_En_Ge3/z_en_ge3.h
+@@ -51,6 +51,7 @@ typedef struct EnGe3 {
+     /* 0x316 */ s16 actionTimer;
+     /* 0x318 */ s16 screamTimer;
+     /* 0x31C */ EnGe3ActionFunc actionFunc;
+-} EnGe3; // size = 0x320
++    u8 mmNoDetect; // Majora's Mask touch mod: after catching Link once, she lets him be
++} EnGe3;
+ 
+ #endif // Z_EN_GE3_H
+diff --git a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
+index 1cedd03..7d9f63d 100644
+--- a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
++++ b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.c
+@@ -302,9 +302,23 @@ void EnLookNuts_SetupSendPlayerToSpawn(EnLookNuts* this) {
+     this->actionFunc = EnLookNuts_SendPlayerToSpawn;
+ }
+ 
++s32 MMMod_OptionalStealth(void);
++
+ void EnLookNuts_SendPlayerToSpawn(EnLookNuts* this, PlayState* play) {
+     SkelAnime_Update(&this->skelAnime);
+     Math_SmoothStepToS(&this->actor.world.rot.y, this->actor.yawTowardsPlayer, 1, 0xBB8, 0);
++    if (MMMod_OptionalStealth() && (Message_GetState(&play->msgCtx) == TEXT_STATE_EVENT) && Message_ShouldAdvance(play)) {
++        // Majora's Mask touch mod: a hit and a knockback instead of being sent back to the entrance
++        Message_CloseTextbox(play);
++        Player_SetCsActionWithHaltedActors(play, &this->actor, PLAYER_CSACTION_END);
++        func_800B8D50(play, &this->actor, 8.0f, this->actor.yawTowardsPlayer, 5.0f, 8);
++        D_80A6862C = false;
++        this->isPlayerDetected = false;
++        this->mmCooldown = 200;
++        this->actor.gravity = -1.0f;
++        EnLookNuts_SetupPatrol(this);
++        return;
++    }
+     if ((Message_GetState(&play->msgCtx) == TEXT_STATE_EVENT) && Message_ShouldAdvance(play)) {
+         Message_CloseTextbox(play);
+         play->nextEntrance = Entrance_CreateFromSpawn(this->spawnIndex);
+@@ -362,7 +376,10 @@ void EnLookNuts_Update(Actor* thisx, PlayState* play) {
+                 }
+             }
+ 
+-            if ((this->isPlayerDetected == true) || (this->actor.xzDistToPlayer < 20.0f)) {
++            if (this->mmCooldown > 0) {
++                this->mmCooldown--;
++                this->isPlayerDetected = false;
++            } else if ((this->isPlayerDetected == true) || (this->actor.xzDistToPlayer < 20.0f)) {
+                 Player* player = GET_PLAYER(play);
+ 
+                 if (!(player->stateFlags3 & PLAYER_STATE3_100) && !Play_InCsMode(play)) {
+diff --git a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.h b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.h
+index 6f600f1..bad9c5d 100644
+--- a/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.h
++++ b/mm/src/overlays/actors/ovl_En_Look_Nuts/z_en_look_nuts.h
+@@ -36,6 +36,7 @@ typedef struct EnLookNuts {
+     /* 0x22C */ Vec3f headRot;
+     /* 0x238 */ Vec3f headRotTarget; // Target value for head rotation
+     /* 0x244 */ ColliderCylinder collider;
+-} EnLookNuts; // size = 0x290
++    s16 mmCooldown; // Majora's Mask touch mod: optional stealth
++} EnLookNuts;
+ 
+ #endif // Z_EN_LOOK_NUTS_H
 diff --git a/mm/src/overlays/actors/ovl_player_actor/z_player.c b/mm/src/overlays/actors/ovl_player_actor/z_player.c
 index 2e947e0..7bcd6c4 100644
 --- a/mm/src/overlays/actors/ovl_player_actor/z_player.c
