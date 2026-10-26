@@ -6019,10 +6019,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..4ac654b
+index 0000000..c39e543
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2083 @@
+@@ -0,0 +1,2201 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7270,7 +7270,41 @@ index 0000000..4ac654b
 +// Mountain Village mesh pieces, standing on the raised grass patch outside Milk Road. Walk into its door
 +// and you go inside: the smithy's own interior, emptied out, as your home. Rest there, and your masks hang
 +// on the wall. Epona's paddock stands beside it.
-+#include "assets/scenes/Z2_10YUKIYAMANOMURA2/Z2_10YUKIYAMANOMURA2/Z2_10YUKIYAMANOMURA2_room_00.h"
++extern "C" uint8_t ResourceMgr_FileExists(const char* resName);
++extern "C" void ResourceMgr_PatchGfxByName(const char* path, const char* patchName, int index, Gfx instruction);
++extern "C" void ResourceMgr_UnpatchGfxByName(const char* path, const char* patchName);
++
++// Find a room display list in the game data. The archive's folder naming can differ between builds, so try
++// both forms; returns "" if it isn't there (then it's simply not drawn - never a crash).
++static std::string FindRoomDL(const char* scene, int roomNum, int offset) {
++    char a[160], b[160];
++    snprintf(a, sizeof(a), "scenes/nonmq/%s/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    snprintf(b, sizeof(b), "scenes/nonmq/%s_scene/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    if (ResourceMgr_FileExists(a)) return a;
++    if (ResourceMgr_FileExists(b)) return b;
++    return "";
++}
++
++struct WallBoxXZ {
++    f32 x0, x1, z0, z1;
++};
++
++struct RoomPiece {
++    const char* scene;
++    int room;
++    int offset;
++    std::string path; // resolved once
++    bool resolved;
++};
++
++static Gfx* PieceDL(RoomPiece& p) {
++    if (!p.resolved) {
++        p.path = FindRoomDL(p.scene, p.room, p.offset);
++        p.resolved = true;
++        if (p.path.empty()) Crumb(std::string("missing room piece ") + p.scene);
++    }
++    return p.path.empty() ? nullptr : (Gfx*)p.path.c_str();
++}
 +
 +struct HouseData {
 +    u32 magic;
@@ -7304,11 +7338,55 @@ index 0000000..4ac654b
 +#define HOME_ENTRANCE ENTRANCE(MOUNTAIN_SMITHY, 0)
 +
 +// The cabin's pieces of the Mountain Village mesh (walls, roof, porch, chimney)
-+static const char* sSmithyDLs[] = {
-+    Z2_10YUKIYAMANOMURA2_room_00DL_00A900, Z2_10YUKIYAMANOMURA2_room_00DL_00B3C0,
-+    Z2_10YUKIYAMANOMURA2_room_00DL_009C58, Z2_10YUKIYAMANOMURA2_room_00DL_00B650,
-+    Z2_10YUKIYAMANOMURA2_room_00DL_00C108, Z2_10YUKIYAMANOMURA2_room_00DL_00C5A8,
-+    Z2_10YUKIYAMANOMURA2_room_00DL_00C810,
++static RoomPiece sSmithyDLs[] = {
++    { "Z2_10YUKIYAMANOMURA2", 0, 0x00A900 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00B3C0 },
++    { "Z2_10YUKIYAMANOMURA2", 0, 0x009C58 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00B650 },
++    { "Z2_10YUKIYAMANOMURA2", 0, 0x00C108 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00C5A8 },
++    { "Z2_10YUKIYAMANOMURA2", 0, 0x00C810 },
++};
++
++// ---- Inside: a cosy home instead of a workshop.
++// The smithy's working gear (forge, its hood, anvils, grindstone, workbench, tools) is hidden while you're
++// home, and the Stock Pot Inn guest room's furniture is placed in: two beds, a table and chairs, a dresser.
++static RoomPiece sSmithyGear[] = {
++    { "Z2_KAJIYA", 0, 0x004098 }, { "Z2_KAJIYA", 0, 0x0043D0 }, // forge, forge hood
++    { "Z2_KAJIYA", 0, 0x008CD0 }, { "Z2_KAJIYA", 0, 0x00B7B8 }, // anvil, grindstone
++    { "Z2_KAJIYA", 0, 0x006018 }, { "Z2_KAJIYA", 0, 0x00C690 }, // tools, frame
++    { "Z2_KAJIYA", 0, 0x00BDB0 }, { "Z2_KAJIYA", 0, 0x006DB0 }, // workbench, trough
++    { "Z2_KAJIYA", 0, 0x00B3D0 }, { "Z2_KAJIYA", 0, 0x00D680 }, // floor plate, forge glow
++};
++static RoomPiece sInnFurniture[] = {
++    { "Z2_YADOYA", 3, 0x001FA8 }, // beds
++    { "Z2_YADOYA", 3, 0x003888 }, // bed frames, dresser
++    { "Z2_YADOYA", 3, 0x002BA0 }, // table, stools
++    { "Z2_YADOYA", 3, 0x004C18 }, // chairs, boxes, plant
++    { "Z2_YADOYA", 3, 0x0042C8 }, // small things on the table
++};
++// inn guest room -> smithy interior (inn floor y 210 -> smithy floor y -15; room centred)
++#define INN_DX 450.0f
++#define INN_DY (-225.0f)
++#define INN_DZ (-240.0f)
++static bool sGearHidden = false;
++
++static void HideSmithyGear(bool hide) {
++    if (hide == sGearHidden) return;
++    sGearHidden = hide;
++    for (auto& p : sSmithyGear) {
++        if (PieceDL(p) == nullptr) continue;
++        if (hide) {
++            ResourceMgr_PatchGfxByName(p.path.c_str(), "mmHomeHide", 0, gsSPEndDisplayList());
++        } else {
++            ResourceMgr_UnpatchGfxByName(p.path.c_str(), "mmHomeHide");
++        }
++    }
++}
++
++// Furniture you can't walk through (smithy coordinates)
++static const WallBoxXZ sHomeFurniture[] = {
++    { -141.0f, -69.0f, 38.0f, 150.0f },  // left bed
++    { 69.0f, 141.0f, 38.0f, 150.0f },    // right bed
++    { -50.0f, 11.0f, -76.0f, 0.0f },     // table
++    { -30.0f, 30.0f, -164.0f, -120.0f }, // dresser
 +};
 +
 +// Solid walls (Termina Field x/z ranges and roof height), taken from the smithy's own collision
@@ -7383,8 +7461,9 @@ index 0000000..4ac654b
 +    func_8012C268(&play->state);
 +    Matrix_Translate(SMITHY_DX, SMITHY_DY, SMITHY_DZ, MTXMODE_NEW);
 +    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+    for (const char* dl : sSmithyDLs) {
-+        gSPDisplayList(POLY_OPA_DISP++, (Gfx*)dl);
++    for (auto& piece : sSmithyDLs) {
++        Gfx* dl = PieceDL(piece);
++        if (dl != nullptr) gSPDisplayList(POLY_OPA_DISP++, dl);
 +    }
 +    // the cabin's wooden door (the game's standard door), closed, facing west
 +    Gfx_SetupDL25_Opa(play->state.gfxCtx);
@@ -7439,7 +7518,20 @@ index 0000000..4ac654b
 +    }
 +}
 +
-+// Outside: the cabin. Inside your home: the masks on the wall (the game's own mask pictures).
++static void DrawHomeFurniture(PlayState* play) {
++    OPEN_DISPS(play->state.gfxCtx);
++    func_800BCBF4(&gZeroVec3f, play);
++    func_8012C268(&play->state);
++    Matrix_Translate(INN_DX, INN_DY, INN_DZ, MTXMODE_NEW);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    for (auto& piece : sInnFurniture) {
++        Gfx* dl = PieceDL(piece);
++        if (dl != nullptr) gSPDisplayList(POLY_OPA_DISP++, dl);
++    }
++    CLOSE_DISPS(play->state.gfxCtx);
++}
++
++// Outside: the cabin. Inside your home: furniture, and the masks on the wall (the game's own pictures).
 +static void DrawWorldExtras() {
 +    PlayState* play = gPlayState;
 +    if (play == nullptr) return;
@@ -7447,7 +7539,9 @@ index 0000000..4ac654b
 +        DrawSmithyCabin(play);
 +        return;
 +    }
-+    if (!sAtHome || !sMaskWallFound || play->sceneId != SCENE_KAJIYA) return;
++    if (!sAtHome || play->sceneId != SCENE_KAJIYA) return;
++    DrawHomeFurniture(play);
++    if (!sMaskWallFound) return;
 +    BuildMaskVtx();
 +    OPEN_DISPS(play->state.gfxCtx);
 +    Gfx_SetupDL25_Opa(play->state.gfxCtx);
@@ -7501,6 +7595,7 @@ index 0000000..4ac654b
 +        } else if (play->sceneId != SCENE_KAJIYA) {
 +            sAtHome = false;
 +        }
++        if (!sAtHome) HideSmithyGear(false); // the real smithy looks normal again
 +    }
 +
 +    int req = sHousePlaceReq.exchange(0);
@@ -7516,8 +7611,31 @@ index 0000000..4ac654b
 +    // ---- inside your home (the smithy's interior, with nobody in it)
 +    if (sAtHome && play->sceneId == SCENE_KAJIYA) {
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_NPC].first; a != nullptr; a = a->next) Actor_Kill(a);
-+        if (!sMaskWallFound && play->gameplayFrames > 5) FindMaskWall(play, player->actor.world.pos);
-+        sNearDoor = !Play_InCsMode(play); // rest anywhere in your home
++        if (!sMaskWallFound) {
++            // on the back wall, opposite the door, facing into the room
++            sMaskWallPos = { 0.0f, 120.0f, -203.0f };
++            sMaskWallYaw = 0;
++            sMaskWallFound = true;
++        }
++        HideSmithyGear(true);
++        // the smithy's props (and the forge's fire) aren't part of a home
++        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_PROP].first; a != nullptr; a = a->next) Actor_Kill(a);
++        // furniture is solid
++        for (auto& f : sHomeFurniture) {
++            Vec3f* p = &player->actor.world.pos;
++            if (p->x > f.x0 - 15 && p->x < f.x1 + 15 && p->z > f.z0 - 15 && p->z < f.z1 + 15) {
++                f32 dl = p->x - (f.x0 - 15), dr = (f.x1 + 15) - p->x, db = p->z - (f.z0 - 15), df = (f.z1 + 15) - p->z;
++                f32 m = MIN(MIN(dl, dr), MIN(db, df));
++                if (m == dl) p->x = f.x0 - 15;
++                else if (m == dr) p->x = f.x1 + 15;
++                else if (m == db) p->z = f.z0 - 15;
++                else p->z = f.z1 + 15;
++            }
++        }
++        // Rest by either bed
++        Vec3f bedL = { -105.0f, -15.0f, 94.0f }, bedR = { 105.0f, -15.0f, 94.0f };
++        sNearDoor = !Play_InCsMode(play) && ((Math_Vec3f_DistXZ(&player->actor.world.pos, &bedL) < 130.0f) ||
++                                              (Math_Vec3f_DistXZ(&player->actor.world.pos, &bedR) < 130.0f));
 +        // going out the door leads back to your own front door in Termina Field
 +        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
 +            sHouse.valid) {
