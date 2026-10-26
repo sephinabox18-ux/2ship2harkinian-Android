@@ -5713,10 +5713,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..b3d9f6e
+index 0000000..e8dd6da
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,1922 @@
+@@ -0,0 +1,2045 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -6905,6 +6905,9 @@ index 0000000..b3d9f6e
 +    Vec3f pos;
 +    f32 scale;
 +    s16 rotX, rotY;
++    s8 kind;      // 0 = moon piece, 1..4 = rubble rock variant
++    f32 radius;   // footprint for collision (0 = walk-through)
++    f32 sx, sy, sz;
 +};
 +static std::vector<Debris> sDebris;
 +static Vec3f sCrater;
@@ -6935,6 +6938,44 @@ index 0000000..b3d9f6e
 +    return true;
 +}
 +
++#define MOON_MODEL_RADIUS 4000.0f // rough size of the moon model at scale 1
++
++static void AddMoonPiece(Vec3f p, f32 scale, s16 rx, s16 ry) {
++    Debris d = {};
++    d.pos = p;
++    d.scale = scale;
++    d.rotX = rx;
++    d.rotY = ry;
++    d.kind = 0;
++    d.radius = MOON_MODEL_RADIUS * scale * 0.85f;
++    sDebris.push_back(d);
++}
++
++static void AddRubblePile(PlayState* play, Vec3f c, f32 size, u32& seed) {
++    auto rnd = [&seed]() {
++        seed = seed * 1664525u + 1013904223u;
++        return (seed >> 8) / (f32)(1 << 24);
++    };
++    s32 n = 3 + (s32)(rnd() * 5);
++    for (s32 i = 0; i < n; i++) {
++        f32 a = rnd() * 2.0f * M_PI, d = rnd() * size;
++        Vec3f p;
++        if (!FloorAt(play, c.x + cosf(a) * d, c.z + sinf(a) * d, c.y, &p)) continue;
++        Debris r = {};
++        f32 base = size * (0.25f + rnd() * 0.45f) * (i == 0 ? 1.4f : 1.0f);
++        r.pos = p;
++        r.kind = 1 + (s8)(rnd() * 4);
++        r.rotX = (s16)(rnd() * 0xFFFF);
++        r.rotY = (s16)(rnd() * 0xFFFF);
++        r.sx = base * (0.8f + rnd() * 0.6f);
++        r.sy = base * (0.5f + rnd() * 0.5f);
++        r.sz = base * (0.8f + rnd() * 0.6f);
++        r.pos.y -= r.sy * 0.25f; // settled into the ground
++        r.radius = (r.sx > 45.0f) ? r.sx * 0.8f : 0.0f;
++        sDebris.push_back(r);
++    }
++}
++
 +static void PlaceDebris(PlayState* play) {
 +    sDebris.clear();
 +    sCraterRadius = 0.0f;
@@ -6953,38 +6994,104 @@ index 0000000..b3d9f6e
 +        Vec3f c = { 0.0f, base.y, 0.0f };
 +        if (field) {
 +            f32 len = sqrtf(base.x * base.x + base.z * base.z);
-+            f32 k = len > 1.0f ? 1700.0f / len : 0.0f;
++            f32 k = len > 1.0f ? 2200.0f / len : 0.0f;
 +            c.x = base.x * k;
 +            c.z = base.z * k;
 +        }
 +        if (FloorAt(play, c.x, c.z, base.y, &sCrater)) {
-+            sCraterRadius = town ? 420.0f : 950.0f;
-+            s32 ring = town ? 9 : 16;
-+            for (s32 i = 0; i < ring; i++) {
-+                f32 a = (i / (f32)ring) * 2.0f * M_PI + rnd() * 0.4f;
-+                f32 d = sCraterRadius * (0.75f + rnd() * 0.45f);
++            // the moon itself, huge, broken, half sunk in its crater...
++            f32 moon = field ? 0.32f : 0.14f;
++            sCraterRadius = MOON_MODEL_RADIUS * moon * 1.6f;
++            AddMoonPiece(sCrater, moon, 0x3000, (s16)(rnd() * 0xFFFF));
++            // ...with great pieces of it broken off around it
++            s32 pieces = field ? 5 : 3;
++            for (s32 i = 0; i < pieces; i++) {
++                f32 a = (i / (f32)pieces) * 2.0f * M_PI + rnd() * 0.6f;
++                f32 d = MOON_MODEL_RADIUS * moon * (1.15f + rnd() * 0.5f);
 +                Vec3f p;
 +                if (FloorAt(play, sCrater.x + cosf(a) * d, sCrater.z + sinf(a) * d, sCrater.y, &p)) {
-+                    sDebris.push_back({ p, 0.012f + rnd() * (town ? 0.014f : 0.03f), (s16)(rnd() * 0xFFFF),
-+                                        (s16)(rnd() * 0xFFFF) });
++                    AddMoonPiece(p, moon * (0.25f + rnd() * 0.2f), (s16)(rnd() * 0xFFFF), (s16)(rnd() * 0xFFFF));
 +                }
 +            }
-+            // the biggest piece sits in the crater itself
-+            sDebris.push_back({ sCrater, town ? 0.035f : 0.07f, 0x4000, (s16)(rnd() * 0xFFFF) });
++            // a field of rubble thrown out by the impact
++            s32 piles = field ? 26 : 14;
++            for (s32 i = 0; i < piles; i++) {
++                f32 a = rnd() * 2.0f * M_PI;
++                f32 d = sCraterRadius * (0.7f + rnd() * 1.1f);
++                Vec3f p;
++                if (FloorAt(play, sCrater.x + cosf(a) * d, sCrater.z + sinf(a) * d, sCrater.y, &p)) {
++                    AddRubblePile(play, p, field ? 160.0f : 110.0f, seed);
++                }
++            }
 +        }
 +    }
-+    // scattered fragments everywhere outdoors
-+    s32 scatter = (town || field) ? 14 : 18;
++    // rubble scattered everywhere outdoors (streets, fields, paths)
++    s32 scatter = town ? 34 : (field ? 30 : 16);
 +    for (s32 i = 0; i < scatter; i++) {
-+        f32 a = rnd() * 2.0f * M_PI, d = 250.0f + rnd() * 1800.0f;
++        f32 a = rnd() * 2.0f * M_PI, d = 200.0f + rnd() * (town ? 1100.0f : 2200.0f);
 +        Vec3f p;
 +        if (FloorAt(play, base.x + cosf(a) * d, base.z + sinf(a) * d, base.y, &p)) {
-+            sDebris.push_back({ p, 0.004f + rnd() * 0.012f, (s16)(rnd() * 0xFFFF), (s16)(rnd() * 0xFFFF) });
++            AddRubblePile(play, p, town ? 90.0f : 120.0f, seed);
 +        }
 +    }
 +}
 +
-+// Scorched crater: a dark disc fading out at the edge, drawn just above the ground
++// Rubble rocks: four lumpy low-poly stones (jittered icosahedra) with baked light/dark shading
++static Vtx sRockVtx[4][12];
++static Gfx sRockDL[4][16];
++static bool sRocksBuilt = false;
++
++static void BuildRocks() {
++    if (sRocksBuilt) return;
++    sRocksBuilt = true;
++    static const f32 t = 1.618f;
++    static const f32 ico[12][3] = { { -1, t, 0 }, { 1, t, 0 }, { -1, -t, 0 }, { 1, -t, 0 }, { 0, -1, t }, { 0, 1, t },
++                                     { 0, -1, -t }, { 0, 1, -t }, { t, 0, -1 }, { t, 0, 1 }, { -t, 0, -1 }, { -t, 0, 1 } };
++    static const u8 faces[20][3] = { { 0, 11, 5 }, { 0, 5, 1 }, { 0, 1, 7 }, { 0, 7, 10 }, { 0, 10, 11 },
++                                      { 1, 5, 9 }, { 5, 11, 4 }, { 11, 10, 2 }, { 10, 7, 6 }, { 7, 1, 8 },
++                                      { 3, 9, 4 }, { 3, 4, 2 }, { 3, 2, 6 }, { 3, 6, 8 }, { 3, 8, 9 },
++                                      { 4, 9, 5 }, { 2, 4, 11 }, { 6, 2, 10 }, { 8, 6, 7 }, { 9, 8, 1 } };
++    // stone grey, dusty plaster, dark ash, scorched brown
++    static const u8 tint[4][3] = { { 120, 116, 110 }, { 168, 150, 120 }, { 70, 64, 60 }, { 110, 80, 56 } };
++    u32 seed = 1234567;
++    for (int v = 0; v < 4; v++) {
++        for (int i = 0; i < 12; i++) {
++            seed = seed * 1664525u + 1013904223u;
++            f32 j = 0.7f + ((seed >> 8) & 0xFFFF) / 65535.0f * 0.6f; // lumpiness
++            f32 x = ico[i][0] / 1.9f * j, y = ico[i][1] / 1.9f * j, z = ico[i][2] / 1.9f * j;
++            f32 light = 0.55f + 0.45f * (y * 0.5f + 0.5f);            // lighter on top
++            sRockVtx[v][i] = (Vtx)VTX((s16)(x * 100), (s16)(y * 100), (s16)(z * 100), 0, 0,
++                                      (u8)(tint[v][0] * light), (u8)(tint[v][1] * light), (u8)(tint[v][2] * light), 255);
++        }
++        Gfx* g = sRockDL[v];
++        gSPVertex(g++, (uintptr_t)sRockVtx[v], 12, 0);
++        for (int f = 0; f < 20; f += 2) {
++            gSP2Triangles(g++, faces[f][0], faces[f][1], faces[f][2], 0, faces[f + 1][0], faces[f + 1][1],
++                          faces[f + 1][2], 0);
++        }
++        gSPEndDisplayList(g++);
++    }
++}
++
++// Keep Link out of the big moon pieces and large rocks (simple push-out, no level geometry needed)
++static void CollideWithDebris(PlayState* play) {
++    Player* player = GET_PLAYER(play);
++    if (player == nullptr) return;
++    Vec3f* lp = &player->actor.world.pos;
++    for (auto& d : sDebris) {
++        if (d.radius <= 0.0f) continue;
++        f32 top = (d.kind == 0) ? d.pos.y + MOON_MODEL_RADIUS * d.scale * 0.6f : d.pos.y + d.sy;
++        if (lp->y > top) continue;
++        f32 dx = lp->x - d.pos.x, dz = lp->z - d.pos.z;
++        f32 dist = sqrtf(dx * dx + dz * dz);
++        if (dist < d.radius && dist > 0.01f) {
++            f32 push = d.radius - dist;
++            lp->x += dx / dist * push;
++            lp->z += dz / dist * push;
++        }
++    }
++}
++
 +// 12 segments: centre + inner ring + faded outer ring = 25 vertices (fits the vertex cache)
 +#define CRATER_SEG 12
 +static Vtx sCraterVtx[1 + 2 * CRATER_SEG];
@@ -7026,13 +7133,28 @@ index 0000000..b3d9f6e
 +        gSPDisplayList(POLY_XLU_DISP++, sCraterDL);
 +    }
 +    if (!sDebris.empty()) {
++        BuildRocks();
++        // rubble
++        Gfx_SetupDL25_Opa(play->state.gfxCtx);
++        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
++        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
++        for (auto& d : sDebris) {
++            if (d.kind == 0) continue;
++            Matrix_Translate(d.pos.x, d.pos.y, d.pos.z, MTXMODE_NEW);
++            Matrix_RotateYS(d.rotY, MTXMODE_APPLY);
++            Matrix_RotateXS(d.rotX >> 3, MTXMODE_APPLY); // a slight tilt
++            Matrix_Scale(d.sx / 100.0f, d.sy / 100.0f, d.sz / 100.0f, MTXMODE_APPLY);
++            MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++            gSPDisplayList(POLY_OPA_DISP++, sRockDL[d.kind - 1]);
++        }
++        // the moon and its broken pieces (lit normally)
 +        Gfx_SetupDL25_Opa(play->state.gfxCtx);
 +        gDPSetPrimColor(POLY_OPA_DISP++, 0, 0x80, 40, 40, 40, 255); // dead, unlit eyes
 +        for (auto& d : sDebris) {
-+            // half-buried chunk of moon, face turned into the ground
-+            Matrix_Translate(d.pos.x, d.pos.y - 1500.0f * d.scale, d.pos.z, MTXMODE_NEW);
++            if (d.kind != 0) continue;
++            Matrix_Translate(d.pos.x, d.pos.y - MOON_MODEL_RADIUS * d.scale * 0.35f, d.pos.z, MTXMODE_NEW);
 +            Matrix_RotateYS(d.rotY, MTXMODE_APPLY);
-+            Matrix_RotateXS(0x4000 + (d.rotX & 0x1FFF), MTXMODE_APPLY);
++            Matrix_RotateXS(d.rotX, MTXMODE_APPLY);
 +            Matrix_Scale(d.scale, d.scale, d.scale, MTXMODE_APPLY);
 +            MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
 +            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gMoonDL);
@@ -7064,6 +7186,7 @@ index 0000000..b3d9f6e
 +        sObjRd = sObjSkb = -1;
 +        PlaceDebris(play);
 +    }
++    CollideWithDebris(play);
 +
 +    // no moon in the sky, and nobody left
 +    for (s32 cat = 0; cat < ACTORCAT_MAX; cat++) {
