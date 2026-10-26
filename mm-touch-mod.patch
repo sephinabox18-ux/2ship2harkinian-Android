@@ -6019,10 +6019,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..c39e543
+index 0000000..a81d440
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2201 @@
+@@ -0,0 +1,2207 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7277,9 +7277,11 @@ index 0000000..c39e543
 +// Find a room display list in the game data. The archive's folder naming can differ between builds, so try
 +// both forms; returns "" if it isn't there (then it's simply not drawn - never a crash).
 +static std::string FindRoomDL(const char* scene, int roomNum, int offset) {
-+    char a[160], b[160];
-+    snprintf(a, sizeof(a), "scenes/nonmq/%s/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
-+    snprintf(b, sizeof(b), "scenes/nonmq/%s_scene/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    // "__OTR__" marks the string as a resource name for gSPDisplayList (without it the text itself
++    // would be treated as graphics commands)
++    char a[180], b[180];
++    snprintf(a, sizeof(a), "__OTR__scenes/nonmq/%s/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    snprintf(b, sizeof(b), "__OTR__scenes/nonmq/%s_scene/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
 +    if (ResourceMgr_FileExists(a)) return a;
 +    if (ResourceMgr_FileExists(b)) return b;
 +    return "";
@@ -7465,16 +7467,20 @@ index 0000000..c39e543
 +        Gfx* dl = PieceDL(piece);
 +        if (dl != nullptr) gSPDisplayList(POLY_OPA_DISP++, dl);
 +    }
-+    // the cabin's wooden door (the game's standard door), closed, facing west
-+    Gfx_SetupDL25_Opa(play->state.gfxCtx);
-+    gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);
-+    Matrix_Translate(DOOR_X, DOOR_Y, DOOR_Z, MTXMODE_NEW);
-+    Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
-+    Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
-+    Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
-+    Matrix_Translate(-3000.0f, 0.0f, 0.0f, MTXMODE_APPLY);
-+    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+    gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gDoorLeftDL);
++    // the cabin's wooden door (the game's standard door), closed, facing west - only if it's in the data
++    static int sDoorExists = -1;
++    if (sDoorExists < 0) sDoorExists = ResourceMgr_FileExists(gDoorLeftDL) ? 1 : 0;
++    if (sDoorExists) {
++        Gfx_SetupDL25_Opa(play->state.gfxCtx);
++        gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);
++        Matrix_Translate(DOOR_X, DOOR_Y, DOOR_Z, MTXMODE_NEW);
++        Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
++        Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
++        Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
++        Matrix_Translate(-3000.0f, 0.0f, 0.0f, MTXMODE_APPLY);
++        MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++        gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gDoorLeftDL);
++    }
 +    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
