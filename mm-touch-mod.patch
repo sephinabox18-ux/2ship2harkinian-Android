@@ -987,10 +987,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..4896f83
+index 0000000..daaa26e
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2817 @@
+@@ -0,0 +1,2815 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -2718,12 +2718,10 @@ index 0000000..4896f83
 +            act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +            refreshSettings();
 +        });
-+        TextView houseLabel = settingsRow(settingsPanel, "House (Termina Field)", "Remove", () -> {
++        TextView houseLabel = settingsRow(settingsPanel, "House (outside Milk Road)", "Off", () -> {
 +            act.nativeMmSetOption(12, 2);
-+            showSettings(false);
-+        }, "Build here", () -> {
++        }, "On", () -> {
 +            act.nativeMmSetOption(12, 1);
-+            showSettings(false);
 +        });
 +        houseLabel.setText("");
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
@@ -6021,10 +6019,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..05fd64b
+index 0000000..bee87e6
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2044 @@
+@@ -0,0 +1,2040 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -6400,36 +6398,40 @@ index 0000000..05fd64b
 +    return true;
 +}
 +
-+// Triple jump (like Mario 64): jump again as you land for a bigger jump, and a third time for a flip.
-+// - Taps just before landing are remembered and used the moment Link touches down.
-+// - Landing from a jump goes straight back into running if the stick is held (no stop).
++// Triple jump (like Mario 64): tap Jump again as you land for a higher jump, and a third time for a front
++// flip. Taps a little early are remembered; landing goes straight back into a run; speed is never lost.
 +extern "C" void func_8083A794(Player* player, PlayState* play); // enter the running action
 +static s32 sJumpStage = 0;      // 0 = none, 1..3 = which jump of the chain we're in
 +static bool sJumpAirborne = false;
++static u32 sJumpStartFrame = 0;
 +static u32 sJumpLandFrame = 0;
 +static u32 sJumpBufferedFrame = 0;
 +static bool sJumpBuffered = false;
 +static f32 sJumpRunSpeed = 0.0f;
++static s16 sFlipPitch = 0;
 +static std::atomic<int> sTripleJump{ 1 };
++#define JUMP_CHAIN_WINDOW 10 // frames after landing to keep the chain going
++#define JUMP_BUFFER 12       // how early a tap before landing still counts
++#define FLIP_FRAMES 15       // the third jump's full turn
++
++// Read by z_player_lib.c while drawing Link
++extern "C" s16 MMMod_FlipPitch(Player* player) {
++    return (gPlayState != nullptr && player == GET_PLAYER(gPlayState)) ? sFlipPitch : 0;
++}
 +
 +static void DoJump(Player* player, s32 stage) {
 +    f32 base = CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f);
-+    f32 keep = player->speedXZ;
-+    if (stage == 3) {
-+        // third jump: a high front flip
-+        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_fighter_front_jump, base * 1.6f, gPlayState);
-+        keep += 2.0f;
-+    } else if (stage == 2) {
-+        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump, base * 1.3f, gPlayState);
-+        keep += 1.0f;
-+    } else {
-+        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump, base, gPlayState);
-+    }
-+    player->speedXZ = keep; // jumping never stops Link in his tracks
-+    sJumpRunSpeed = keep;
++    f32 keep = MAX(player->speedXZ, sJumpRunSpeed * 0.95f);
++    if (stage <= 1) keep = player->speedXZ;
++    f32 height = base * (stage == 3 ? 1.6f : (stage == 2 ? 1.3f : 1.0f));
++    func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump, height, gPlayState);
++    player->speedXZ = keep + (stage == 3 ? 1.5f : (stage == 2 ? 0.8f : 0.0f)); // never stops Link
++    sJumpRunSpeed = player->speedXZ;
 +    sJumpStage = stage;
 +    sJumpAirborne = true;
 +    sJumpBuffered = false;
++    sJumpStartFrame = gPlayState->gameplayFrames;
++    sFlipPitch = 0;
 +}
 +
 +static void OnPlayerInputs(Input* input) {
@@ -6441,36 +6443,41 @@ index 0000000..05fd64b
 +    s16 stickAngle;
 +    Lib_GetControlStickData(&stickMag, &stickAngle, input);
 +
++    // the flip: one smooth forward turn during the third jump
++    if (sJumpAirborne && sJumpStage == 3) {
++        u32 t = now - sJumpStartFrame;
++        sFlipPitch = (t < FLIP_FRAMES) ? (s16)((t * 0x10000) / FLIP_FRAMES) : 0;
++    } else {
++        sFlipPitch = 0;
++    }
 +    if (sJumpAirborne && !grounded && player->speedXZ > sJumpRunSpeed) sJumpRunSpeed = player->speedXZ;
 +
-+    bool landedNow = false;
-+    if (sJumpAirborne && grounded) {
++    if (sJumpAirborne && grounded && (now - sJumpStartFrame) > 2) {
 +        sJumpAirborne = false;
 +        sJumpLandFrame = now;
-+        landedNow = true;
++        sFlipPitch = 0;
 +        // keep running instead of stopping to land
-+        if (stickMag > 20.0f && CanJump(player)) {
++        if (stickMag > 15.0f && CanJump(player)) {
 +            func_8083A794(player, gPlayState);
 +            player->speedXZ = MAX(player->speedXZ, sJumpRunSpeed * 0.9f);
 +        }
 +        if (sJumpStage >= 3) sJumpStage = 0; // the flip ends the chain
 +    }
 +
-+    bool tapped = TakeRequest(ACT_JUMP);
-+    if (tapped && !grounded && sJumpAirborne) {
-+        // pressed a little before landing: remember it
-+        sJumpBuffered = true;
++    if (TakeRequest(ACT_JUMP)) {
++        sJumpBuffered = true; // used now if possible, otherwise the moment Link lands
 +        sJumpBufferedFrame = now;
-+        tapped = false;
 +    }
-+    bool chainWindow = sTripleJump.load() && (sJumpStage > 0) && (sJumpStage < 3) && ((now - sJumpLandFrame) <= 12);
-+    if (landedNow && sJumpBuffered && (now - sJumpBufferedFrame) <= 15 && CanJump(player)) {
-+        DoJump(player, chainWindow ? sJumpStage + 1 : 1);
-+    } else if (tapped && CanJump(player)) {
-+        DoJump(player, chainWindow ? sJumpStage + 1 : 1);
-+    } else if (grounded && !sJumpAirborne && sJumpStage > 0 && (now - sJumpLandFrame) > 12) {
++    if (sJumpBuffered && (now - sJumpBufferedFrame) > JUMP_BUFFER + JUMP_CHAIN_WINDOW) sJumpBuffered = false;
++
++    bool chainWindow = sTripleJump.load() && (sJumpStage > 0) && (sJumpStage < 3) && !sJumpAirborne &&
++                       ((now - sJumpLandFrame) <= JUMP_CHAIN_WINDOW);
++    if (sJumpBuffered && !sJumpAirborne && CanJump(player)) {
++        // a press from before landing only chains if it came close to the landing
++        bool pressedInTime = (sJumpBufferedFrame + JUMP_BUFFER >= sJumpLandFrame) || (sJumpBufferedFrame >= sJumpLandFrame);
++        DoJump(player, (chainWindow && pressedInTime) ? sJumpStage + 1 : 1);
++    } else if (grounded && !sJumpAirborne && sJumpStage > 0 && (now - sJumpLandFrame) > JUMP_CHAIN_WINDOW) {
 +        sJumpStage = 0; // waited too long: the chain resets
-+        sJumpBuffered = false;
 +    }
 +    // Sprint stays on until you turn it off yourself.
 +}
@@ -7268,8 +7275,10 @@ index 0000000..05fd64b
 +    f32 x, y, z;
 +    s16 yaw;
 +};
-+static HouseData sHouse = {};
-+static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = place here, 2 = remove
++// Fixed spot: the raised grass patch outside Milk Road (top at y = -198), house to the south,
++// Epona's paddock between it and the north edge of the patch
++static HouseData sHouse = { 0x48534533, 1, -2230.0f, -206.0f, 3215.0f, 0 };
++static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = house on, 2 = house off
 +static std::atomic<int> sNearDoor{ 0 };      // close enough to the house to go in
 +static std::atomic<int> sEnterReq{ 0 };
 +static std::atomic<int> sRestReq{ -1 };      // hours to rest
@@ -7299,13 +7308,14 @@ index 0000000..05fd64b
 +static void LoadHouse() {
 +    std::ifstream f(HousePath(), std::ios::binary);
 +    HouseData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534533) sHouse = h;
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534534) sHouse.valid = h.valid; // only on/off is saved
 +}
 +
 +static void SaveHouse() {
-+    sHouse.magic = 0x48534533;
++    HouseData h = sHouse;
++    h.magic = 0x48534534;
 +    std::ofstream f(HousePath(), std::ios::binary | std::ios::trunc);
-+    if (f) f.write((const char*)&sHouse, sizeof(sHouse));
++    if (f) f.write((const char*)&h, sizeof(h));
 +}
 +
 +static bool HouseHere(PlayState* play) {
@@ -7337,18 +7347,15 @@ index 0000000..05fd64b
 +    }
 +    if (!sFencesSpawned && sObjFence >= 0 && Object_IsLoaded(&play->objectCtx, sObjFence)) {
 +        sFencesSpawned = true;
-+        // a square paddock of ranch fences: back, two sides, and the front either side of a gap
-+        struct { f32 lx, lz; s16 rot; } posts[] = {
-+            { PEN_OFFSET_X - PEN_HALF * 0.5f, -PEN_HALF, 0 },      { PEN_OFFSET_X + PEN_HALF * 0.5f, -PEN_HALF, 0 },
-+            { PEN_OFFSET_X - PEN_HALF, -PEN_HALF * 0.5f, 0x4000 }, { PEN_OFFSET_X - PEN_HALF, PEN_HALF * 0.5f, 0x4000 },
-+            { PEN_OFFSET_X + PEN_HALF, -PEN_HALF * 0.5f, 0x4000 }, { PEN_OFFSET_X + PEN_HALF, PEN_HALF * 0.5f, 0x4000 },
-+            { PEN_OFFSET_X - PEN_HALF * 0.75f, PEN_HALF, 0 },     { PEN_OFFSET_X + PEN_HALF * 0.75f, PEN_HALF, 0 },
++        // Romani Ranch fence sections are 320 long. Paddock: x -2600..-1960, z 3560..3880, gap at the front right.
++        struct { f32 x, z; s16 rot; } fences[] = {
++            { -2440.0f, 3880.0f, 0 },      { -2120.0f, 3880.0f, 0 },      // back
++            { -2600.0f, 3720.0f, 0x4000 }, { -1960.0f, 3720.0f, 0x4000 }, // sides
++            { -2440.0f, 3560.0f, 0 },                                     // front (gap on the right)
 +        };
-+        for (auto& p : posts) {
-+            Vec3f w = HouseLocal(p.lx, p.lz);
-+            w.y = FloorY(play, w);
-+            Actor_Spawn(&play->actorCtx, play, ACTOR_BG_UMAJUMP, w.x, w.y, w.z, 0, (s16)(sHouse.yaw + p.rot), 0,
-+                        1 /* plain ranch fence */);
++        for (auto& f : fences) {
++            // type 4: a static fence (type 1 is the bobbing horse-jump fence)
++            Actor_Spawn(&play->actorCtx, play, ACTOR_BG_UMAJUMP, f.x, -198.0f, f.z, 0, f.rot, 0, 4);
 +        }
 +    }
 +}
@@ -7453,24 +7460,10 @@ index 0000000..05fd64b
 +    }
 +
 +    int req = sHousePlaceReq.exchange(0);
-+    if (req == 1) {
-+        if (play->sceneId != SCENE_00KEIKOKU || player == nullptr) {
-+            PostMessage("Stand where you'd like it in Termina Field");
-+        } else {
-+            // the house goes just in front of Link, facing him
-+            sHouse.valid = true;
-+            sHouse.yaw = player->actor.shape.rot.y + 0x8000;
-+            sHouse.x = player->actor.world.pos.x + Math_SinS(player->actor.shape.rot.y) * 450.0f;
-+            sHouse.z = player->actor.world.pos.z + Math_CosS(player->actor.shape.rot.y) * 450.0f;
-+            sHouse.y = FloorY(play, { sHouse.x, player->actor.world.pos.y, sHouse.z });
-+            SaveHouse();
-+            Audio_PlaySfx(NA_SE_SY_DECIDE);
-+            PostMessage("Your house will be there next time you enter Termina Field");
-+        }
-+    } else if (req == 2) {
-+        sHouse.valid = false;
++    if (req == 1 || req == 2) {
++        sHouse.valid = (req == 1);
 +        SaveHouse();
-+        PostMessage("House removed (gone next time you enter Termina Field)");
++        PostMessage(req == 1 ? "House on (outside Milk Road)" : "House off");
 +    }
 +
 +    sNearDoor = 0;
@@ -7485,22 +7478,23 @@ index 0000000..05fd64b
 +        // any way out of the house leads back to your front door in Termina Field
 +        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
 +            sHouse.valid) {
-+            Vec3f door = HouseLocal(0.0f, 420.0f);
++            Vec3f door = { -1880.0f, -198.0f, 3640.0f }; // on the patch, by the paddock gap
 +            sAtHome = false;
-+            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), door, sHouse.yaw, 0);
++            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), door, (s16)0x8000, 0);
 +        }
 +    }
 +
 +    // ---- outside: the house, its paddock, and Epona waiting there
 +    if (HouseHere(play)) {
 +        SpawnHouseActors(play);
-+        Vec3f front = HouseLocal(0.0f, 380.0f);
-+        sNearDoor = (Math_Vec3f_DistXZ(&player->actor.world.pos, &front) < 220.0f) && (player->rideActor == nullptr) &&
++        // close to the house on any side (its walls are solid, the door is too)
++        Vec3f centre = { sHouse.x + 86.0f, sHouse.y, sHouse.z - 16.0f };
++        sNearDoor = (Math_Vec3f_DistXZ(&player->actor.world.pos, &centre) < 520.0f) &&
++                    (fabsf(player->actor.world.pos.y - sHouse.y) < 120.0f) && (player->rideActor == nullptr) &&
 +                    !Play_InCsMode(play);
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_BG].first; a != nullptr; a = a->next) {
 +            if (a->id != ACTOR_EN_HORSE || a == player->rideActor || sEponaPenned || play->gameplayFrames < 10) continue;
-+            Vec3f pen = HouseLocal(PEN_OFFSET_X, 0.0f);
-+            pen.y = FloorY(play, pen);
++            Vec3f pen = { -2280.0f, -198.0f, 3720.0f };
 +            a->world.pos = pen;
 +            a->home.pos = pen;
 +            a->prevPos = pen;
@@ -8051,7 +8045,7 @@ index 0000000..05fd64b
 +    if (option == 8) sTreeChop = value;        // 1 = trees can be chopped down
 +    if (option == 9) sSmoothSteer = value;     // 1 = smoother swimming / horse steering
 +    if (option == 11) sTripleJump = value;     // 1 = Mario-64 style triple jump
-+    if (option == 12) sHousePlaceReq = value;  // 1 = build the house here, 2 = remove it
++    if (option == 12) sHousePlaceReq = value;  // 1 = house on, 2 = house off
 +    if (option == 13) sRestReq = value;        // rest this many hours (at home)
 +    if (option == 14) sEnterReq = 1;           // go into your house
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
@@ -8146,6 +8140,33 @@ index fa46547..92a08eb 100644
      if ((gSaveContext.respawnFlag == -4) || (gSaveContext.respawnFlag == -0x63)) {
          if (CHECK_EVENTINF(EVENTINF_TRIGGER_DAYTELOP)) {
              CLEAR_EVENTINF(EVENTINF_TRIGGER_DAYTELOP);
+diff --git a/mm/src/code/z_player_lib.c b/mm/src/code/z_player_lib.c
+index 4ff0afa..e40da5c 100644
+--- a/mm/src/code/z_player_lib.c
++++ b/mm/src/code/z_player_lib.c
+@@ -4,6 +4,7 @@
+  */
+ 
+ #include "global.h"
++s16 MMMod_FlipPitch(Player* player);
+ #include "2s2h/GameInteractor/GameInteractor.h"
+ 
+ #include "objects/gameplay_keep/gameplay_keep.h"
+@@ -2459,7 +2460,13 @@ s32 Player_OverrideLimbDrawGameplayCommon(PlayState* play, s32 limbIndex, Gfx**
+         }
+ 
+         pos->y -= player->unk_AB8;
+-        if ((player->transformation == PLAYER_FORM_ZORA) && (player->stateFlags3 & PLAYER_STATE3_8000)) {
++        if (MMMod_FlipPitch(player) != 0) {
++            // Majora's Mask touch mod: triple-jump front flip, turning around Link's middle
++            Matrix_Translate(pos->x, pos->y, pos->z, MTXMODE_APPLY);
++            Matrix_RotateXS(MMMod_FlipPitch(player), MTXMODE_APPLY);
++            Matrix_RotateZYX(rot->x, rot->y, rot->z, MTXMODE_APPLY);
++            func_80125318(pos, rot);
++        } else if ((player->transformation == PLAYER_FORM_ZORA) && (player->stateFlags3 & PLAYER_STATE3_8000)) {
+             Matrix_Translate(pos->x, ((Math_CosS(player->unk_AAA) - 1.0f) * 200.0f) + pos->y, pos->z, MTXMODE_APPLY);
+             Matrix_RotateXS(player->unk_AAA, MTXMODE_APPLY);
+ 
 diff --git a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c b/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
 index 978a56f..cd3ea62 100644
 --- a/mm/src/overlays/actors/ovl_En_Ge2/z_en_ge2.c
