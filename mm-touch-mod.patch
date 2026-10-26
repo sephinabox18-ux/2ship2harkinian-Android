@@ -262,10 +262,10 @@ index 0000000..4714358
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
 new file mode 100644
-index 0000000..b5c2efd
+index 0000000..d5d3911
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/HudBarView.java
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,317 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -349,8 +349,8 @@ index 0000000..b5c2efd
 +
 +    public void setHud(int[] values) {
 +        if (values == null || values.length < 9) return;
-+        boolean changed = false;
-+        for (int i = 0; i < 9; i++) {
++        boolean changed = values.length != hud.length;
++        for (int i = 0; i < Math.min(values.length, hud.length); i++) {
 +            int v = (i == 7) ? (values[i] * 24 * 60 / 65536) : values[i];
 +            int old = (i == 7) ? (hud[i] * 24 * 60 / 65536) : hud[i];
 +            if (v != old) changed = true;
@@ -496,13 +496,72 @@ index 0000000..b5c2efd
 +                + (hr < 12 ? " AM" : " PM");
 +        text.setColor(day == 3 && night ? Color.rgb(250, 130, 110) : Ornate.TEXT); // final night: gentle warning
 +        c.drawText(clock, tx, ty, text);
++        tx += text.measureText(clock) + dp(12);
++        text.setColor(Ornate.TEXT);
++        // extras the game used to show on its own HUD
++        if (hud.length >= 12) {
++            if (hud[9] >= 0) {            // small keys (in dungeons)
++                drawKey(c, tx, ty);
++                tx += dp(14);
++                c.drawText("\u00D7" + hud[9], tx, ty, text);
++                tx += text.measureText("\u00D7" + hud[9]) + dp(10);
++            }
++            if (hud[10] >= 0) {           // Epona's carrots (when riding)
++                for (int i = 0; i < 6; i++) {
++                    drawCarrot(c, tx + i * dp(11), ty, i < hud[10]);
++                }
++                tx += dp(70);
++            }
++            if (hud[11] >= 0) {           // Gold Skulltula tokens (in the spider houses)
++                drawToken(c, tx, ty);
++                tx += dp(14);
++                c.drawText(hud[11] + "/30", tx, ty, text);
++            }
++        }
++    }
++
++    private final Paint extra = new Paint(Paint.ANTI_ALIAS_FLAG);
++
++    private void drawKey(Canvas c, float x, float ty) {
++        extra.setColor(Color.rgb(200, 205, 215));
++        extra.setStyle(Paint.Style.STROKE);
++        extra.setStrokeWidth(dp(2));
++        c.drawCircle(x + dp(3.5f), ty - dp(9), dp(3.2f), extra);
++        c.drawLine(x + dp(3.5f), ty - dp(5.5f), x + dp(3.5f), ty + dp(1), extra);
++        c.drawLine(x + dp(3.5f), ty - dp(1), x + dp(7), ty - dp(1), extra);
++        extra.setStyle(Paint.Style.FILL);
++    }
++
++    private void drawCarrot(Canvas c, float x, float ty, boolean have) {
++        Path p = new Path();
++        p.moveTo(x, ty - dp(9));
++        p.lineTo(x + dp(7), ty - dp(9));
++        p.lineTo(x + dp(3.5f), ty + dp(1));
++        p.close();
++        extra.setColor(have ? Color.rgb(250, 140, 40) : Color.argb(80, 250, 140, 40));
++        c.drawPath(p, extra);
++        extra.setColor(have ? Color.rgb(90, 190, 80) : Color.argb(80, 90, 190, 80));
++        c.drawRect(x + dp(2.5f), ty - dp(12), x + dp(4.5f), ty - dp(9), extra);
++    }
++
++    private void drawToken(Canvas c, float x, float ty) {
++        extra.setColor(Color.rgb(240, 200, 70));
++        c.drawCircle(x + dp(5), ty - dp(4.5f), dp(5), extra);
++        extra.setColor(Color.rgb(150, 110, 20));
++        c.drawCircle(x + dp(5), ty - dp(4.5f), dp(2), extra);
 +    }
 +
 +    /** Width this piece needs for the current values. */
 +    public int preferredWidth() {
 +        if (mode == MODE_INFO) {
++            float extraW = 0;
++            if (hud.length >= 12) {
++                if (hud[9] >= 0) extraW += dp(14) + text.measureText("\u00D799") + dp(10);
++                if (hud[10] >= 0) extraW += dp(70);
++                if (hud[11] >= 0) extraW += dp(14) + text.measureText("30/30") + dp(10);
++            }
 +            return (int) (pad() + dp(11) + dp(4) + text.measureText(String.valueOf(Math.max(hud[4], 999))) + dp(10)
-+                    + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + pad());
++                    + text.measureText("\u263E Day 3 \u00B7 12:00 PM") + dp(12) + extraW + pad());
 +        }
 +        float hs = heartSize();
 +        float hearts = pad() + hs * 0.78f + (Math.min(maxHearts(), 10) - 1) * heartStep() + hs * 0.8f + pad();
@@ -701,6 +760,39 @@ index 0000000..1d1e175
 +        c.drawText(dist, tx, ty, text);
 +    }
 +}
+diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MaxHeightScrollView.java b/Android/app/src/main/java/com/twoshipfork/mm/MaxHeightScrollView.java
+new file mode 100644
+index 0000000..f643d23
+--- /dev/null
++++ b/Android/app/src/main/java/com/twoshipfork/mm/MaxHeightScrollView.java
+@@ -0,0 +1,27 @@
++package com.twoshipfork.mm;
++
++import android.content.Context;
++import android.widget.ScrollView;
++
++/** A ScrollView that wraps its content but never grows taller than maxHeight; then it scrolls. */
++public class MaxHeightScrollView extends ScrollView {
++    private int maxHeight;
++
++    public MaxHeightScrollView(Context c, int maxHeight) {
++        super(c);
++        this.maxHeight = maxHeight;
++        setVerticalScrollBarEnabled(true);
++        setScrollbarFadingEnabled(false); // always show the bar when there's more to see
++    }
++
++    public void setMaxHeight(int h) {
++        maxHeight = h;
++        requestLayout();
++    }
++
++    @Override
++    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++        int capped = MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST);
++        super.onMeasure(widthMeasureSpec, capped);
++    }
++}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java b/Android/app/src/main/java/com/twoshipfork/mm/MiniMapView.java
 new file mode 100644
 index 0000000..648452a
@@ -895,10 +987,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..4197a98
+index 0000000..16b865d
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2629 @@
+@@ -0,0 +1,2809 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -942,10 +1034,12 @@ index 0000000..4197a98
 +            ACT_TRAIL = 7, ACT_SPRINT_ON = 8, ACT_SPRINT_OFF = 9, ACT_HORSE = 10;
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
-+            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024, ST_SWIMMING = 2048;
++            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024, ST_SWIMMING = 2048,
++            ST_AT_HOUSE = 4096;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
-+            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10, KIND_DPAD = 11;
++            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10, KIND_DPAD = 11,
++            KIND_REST = 12;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -1065,6 +1159,12 @@ index 0000000..4197a98
 +    private WheelView wheel;
 +    private MiniMapView miniMap;
 +    private DpadView dpad;
++    private Ctl restCtl;
++    private LinearLayout restPanel;
++    private TextView restHoursLabel;
++    private int restHours = 6;
++    private boolean tripleJump;
++    private TextView tripleLabel;
 +    private Ctl dpadCtl;
 +    private Ctl mapCtl;
 +    private boolean ourMap;
@@ -1144,6 +1244,7 @@ index 0000000..4197a98
 +        act = activity;
 +        prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
 +        opacity = prefs.getFloat("opacity", 0.85f);
++        snapToGrid = prefs.getBoolean("snapToGrid", true);
 +        softStyle = prefs.getBoolean("softStyle", true);
 +        Ornate.setSoft(softStyle);
 +        GOLD = softStyle ? Color.rgb(255, 236, 205) : Color.rgb(232, 196, 92);
@@ -1167,7 +1268,7 @@ index 0000000..4197a98
 +        optionalStealth = prefs.getBoolean("optionalStealth", true);
 +        treeChop = prefs.getBoolean("treeChop", true);
 +        smoothSteer = prefs.getBoolean("smoothSteer", true);
-+        ruinedTermina = prefs.getBoolean("ruinedTermina", true);
++        tripleJump = prefs.getBoolean("tripleJump", true);
 +
 +        ctls.add(new Ctl("a", "A", "", KIND_N64, N64_A, STYLE_A, 0.900f, 0.700f, 84));
 +        ctls.add(new Ctl("attack", "B", "", KIND_N64, N64_B, STYLE_B, 0.790f, 0.840f, 78));
@@ -1191,6 +1292,8 @@ index 0000000..4197a98
 +        mapCtl = new Ctl("ourmap", "", "", KIND_MAPVIEW, 0, STYLE_PLAIN, 0.100f, 0.640f, 120);
 +        ctls.add(mapCtl);
 +        ctls.add(new Ctl("horse", "Epona", "", KIND_ACTION, ACT_HORSE, STYLE_PLAIN, 0.560f, 0.200f, 50));
++        restCtl = new Ctl("rest", "Rest", "", KIND_REST, 0, STYLE_PLAIN, 0.500f, 0.720f, 64);
++        ctls.add(restCtl);
 +        dpadCtl = new Ctl("dpad", "", "", KIND_DPAD, 0, STYLE_PLAIN, 0.320f, 0.300f, 110);
 +        ctls.add(dpadCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
@@ -1249,6 +1352,9 @@ index 0000000..4197a98
 +        }
 +        marker = new MarkerView(act);
 +        root.addView(marker, 2, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
++        gridOverlay = new GridOverlay();
++        gridOverlay.setVisibility(View.GONE);
++        root.addView(gridOverlay, 3, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 +        marker.setVisibility(View.GONE);
 +        buildSongsPanel();
 +        buildPausePanel();
@@ -1258,6 +1364,7 @@ index 0000000..4197a98
 +        buildToast();
 +        buildCloseMenuButton();
 +        buildWheel();
++        buildRestPanel();
 +
 +        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) -> {
 +            try {
@@ -1277,7 +1384,7 @@ index 0000000..4197a98
 +        act.nativeMmSetOption(7, swimInvert ? 1 : 0);
 +        act.nativeMmSetOption(8, treeChop ? 1 : 0);
 +        act.nativeMmSetOption(9, smoothSteer ? 1 : 0);
-+        act.nativeMmSetOption(10, ruinedTermina ? 1 : 0);
++        act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +        lastTouch = System.currentTimeMillis();
 +        handler.post(housekeeping);
 +        handler.post(poll);
@@ -1384,6 +1491,12 @@ index 0000000..4197a98
 +            updateCIcons();
 +            updateActionAndForm();
 +            checkLatches();
++            boolean atHouse = (stateBits & ST_AT_HOUSE) != 0;
++            if (atHouse != lastAtHouse) {
++                lastAtHouse = atHouse;
++                layoutAll();
++                if (!atHouse) showRest(false);
++            }
 +            updateMarker();
 +            updateMiniMap();
 +            updateDpad();
@@ -1505,6 +1618,7 @@ index 0000000..4197a98
 +            case "qsave": return Ornate.ICON_SAVE;
 +            case "wheel": return Ornate.ICON_PLUS;
 +            case "horse": return Ornate.ICON_HORSE;
++            case "rest": return Ornate.ICON_MOON;
 +            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
@@ -1660,7 +1774,10 @@ index 0000000..4197a98
 +        songsPanel.addView(title);
 +        songsList = new LinearLayout(act);
 +        songsList.setOrientation(LinearLayout.VERTICAL);
-+        songsPanel.addView(songsList);
++        // the list scrolls if it's taller than the screen allows; Play ocarina / Cancel stay visible below it
++        MaxHeightScrollView songsScroll = new MaxHeightScrollView(act, (int) (Math.min(act.getResources().getDisplayMetrics().widthPixels, act.getResources().getDisplayMetrics().heightPixels) * 0.55f));
++        songsScroll.addView(songsList);
++        songsPanel.addView(songsScroll);
 +        TextView hint = new TextView(act);
 +        hint.setText("Tap a song to play it");
 +        hint.setTextColor(Color.argb(170, 255, 255, 255));
@@ -1831,6 +1948,60 @@ index 0000000..4197a98
 +    }
 +
 +    private int lastAction = -99;
++    private boolean lastAtHouse = false;
++
++    // ---------------------------------------------------------------- resting at your house
++    private void buildRestPanel() {
++        restPanel = new LinearLayout(act);
++        restPanel.setOrientation(LinearLayout.VERTICAL);
++        restPanel.setGravity(Gravity.CENTER_HORIZONTAL);
++        restPanel.setPadding(dp(16), dp(10), dp(16), dp(12));
++        restPanel.setBackground(panelDrawable());
++        restPanel.addView(infoLine("Rest", 17, GOLD, true));
++        LinearLayout row = new LinearLayout(act);
++        row.setGravity(Gravity.CENTER_VERTICAL);
++        row.addView(editButton("\u2212", v -> setRestHours(restHours - 1)));
++        restHoursLabel = infoLine("", 15, Ornate.TEXT, true);
++        restHoursLabel.setGravity(Gravity.CENTER);
++        row.addView(restHoursLabel, new LinearLayout.LayoutParams(dp(220), ViewGroup.LayoutParams.WRAP_CONTENT));
++        row.addView(editButton("+", v -> setRestHours(restHours + 1)));
++        restPanel.addView(row);
++        LinearLayout buttons = new LinearLayout(act);
++        buttons.addView(editButton("Rest", v -> {
++            act.nativeMmSetOption(13, restHours);
++            showRest(false);
++        }));
++        buttons.addView(editButton("Cancel", v -> showRest(false)));
++        restPanel.addView(buttons);
++        restPanel.setVisibility(View.GONE);
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.CENTER;
++        root.addView(restPanel, lp);
++        setRestHours(restHours);
++    }
++
++    private void setRestHours(int h) {
++        restHours = Math.max(1, Math.min(71, h));
++        String wake = "";
++        int[] hud = act.nativeMmGetHud();
++        if (hud != null && hud.length >= 8) {
++            int mins = (int) (((hud[7] - 0x4000) & 0xFFFF) * 1440L / 65536L); // minutes since 6 AM
++            int total = (Math.max(1, hud[6]) - 1) * 1440 + mins + restHours * 60;
++            total = Math.min(total, 2 * 1440 + 23 * 60); // never past 5 AM on the final day
++            int day = 1 + total / 1440, clock = (total % 1440 + 6 * 60) % 1440;
++            int hr = clock / 60;
++            wake = "  \u2192  Day " + day + " \u00B7 " + (hr % 12 == 0 ? 12 : hr % 12) + (hr < 12 ? " AM" : " PM");
++        }
++        restHoursLabel.setText(restHours + (restHours == 1 ? " hour" : " hours") + wake);
++    }
++
++    private void showRest(boolean show) {
++        restPanel.setVisibility(show ? View.VISIBLE : View.GONE);
++        if (show) {
++            setRestHours(restHours);
++            restPanel.bringToFront();
++        }
++    }
 +    private int heldItemMask = 0; // button of the item in Link's hand (for aiming swaps)
 +
 +    private static int heldButtonMask(int held) {
@@ -2137,7 +2308,9 @@ index 0000000..4197a98
 +        pausePanel.addView(top);
 +
 +        FrameLayout content = new FrameLayout(act);
-+        pausePanel.addView(content, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
++        MaxHeightScrollView pauseScroll = new MaxHeightScrollView(act, (int) (Math.min(act.getResources().getDisplayMetrics().widthPixels, act.getResources().getDisplayMetrics().heightPixels) * 0.72f));
++        pauseScroll.addView(content);
++        pausePanel.addView(pauseScroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 +
 +        // Items / Masks grid
 +        gridContent = new LinearLayout(act);
@@ -2534,12 +2707,20 @@ index 0000000..4197a98
 +            act.nativeMmSetOption(6, optionalStealth ? 1 : 0);
 +            refreshSettings();
 +        });
-+        ruinedLabel = settingsRow(settingsPanel, "If the moon falls", null, null, "Change", () -> {
-+            ruinedTermina = !ruinedTermina;
-+            prefs.edit().putBoolean("ruinedTermina", ruinedTermina).apply();
-+            act.nativeMmSetOption(10, ruinedTermina ? 1 : 0);
++        tripleLabel = settingsRow(settingsPanel, "Triple jump", null, null, "Change", () -> {
++            tripleJump = !tripleJump;
++            prefs.edit().putBoolean("tripleJump", tripleJump).apply();
++            act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +            refreshSettings();
 +        });
++        TextView houseLabel = settingsRow(settingsPanel, "House (field / beach)", "Remove", () -> {
++            act.nativeMmSetOption(12, 2);
++            showSettings(false);
++        }, "Build here", () -> {
++            act.nativeMmSetOption(12, 1);
++            showSettings(false);
++        });
++        houseLabel.setText("");
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
 +            treeChop = !treeChop;
 +            prefs.edit().putBoolean("treeChop", treeChop).apply();
@@ -2590,6 +2771,7 @@ index 0000000..4197a98
 +        settingsPanel.setVisibility(View.VISIBLE);
 +        settingsScroll = new android.widget.ScrollView(act);
 +        settingsScroll.setVerticalScrollBarEnabled(true);
++        settingsScroll.setScrollbarFadingEnabled(false);
 +        settingsScroll.addView(settingsPanel);
 +        settingsScroll.setVisibility(View.GONE);
 +        android.util.DisplayMetrics m = act.getResources().getDisplayMetrics();
@@ -2649,7 +2831,7 @@ index 0000000..4197a98
 +        steerLabel.setText(smoothSteer ? "Smooth" : "Original");
 +        stealthLabel.setText(optionalStealth ? "Fight back" : "Thrown out");
 +        treeLabel.setText(treeChop ? "On" : "Off");
-+        ruinedLabel.setText(ruinedTermina ? "Ruined Termina" : "Game over");
++        tripleLabel.setText(tripleJump ? "On" : "Off");
 +        aimDirLabel.setText(fpInverted ? "Inverted" : "Normal");
 +    }
 +
@@ -2768,6 +2950,13 @@ index 0000000..4197a98
 +        grip.setOnTouchListener((v, e) -> onEditBarDrag(e));
 +        row1.addView(grip);
 +        row1.addView(editButton("Done", v -> setEditing(false)));
++        snapButton = editButton(snapToGrid ? "Snap: grid" : "Snap: free", v -> {
++            snapToGrid = !snapToGrid;
++            prefs.edit().putBoolean("snapToGrid", snapToGrid).apply();
++            snapButton.setText(snapToGrid ? "Snap: grid" : "Snap: free");
++            gridOverlay.setVisibility(editing && snapToGrid ? View.VISIBLE : View.GONE);
++        });
++        row1.addView(snapButton);
 +        row1.addView(editButton("Size \u2212", v -> resizeSelected(1f / 1.1f)));
 +        row1.addView(editButton("Size +", v -> resizeSelected(1.1f)));
 +        row1.addView(editButton("Hide/Show", v -> {
@@ -2957,6 +3146,12 @@ index 0000000..4197a98
 +                if (editing) c.view.setAlpha(1f);
 +                continue;
 +            }
++            if (c.kind == KIND_REST) {
++                boolean show = editing || (!c.hidden && (stateBits & ST_AT_HOUSE) != 0);
++                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
++                continue;
++            }
 +            if (c.kind == KIND_POUND) {
 +                boolean show = editing || (!c.hidden && form != 4); // any mask form (not plain Link)
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -3028,6 +3223,7 @@ index 0000000..4197a98
 +    private void setEditing(boolean on) {
 +        editing = on;
 +        selectedCtl = null;
++        if (gridOverlay != null) gridOverlay.setVisibility(on && snapToGrid ? View.VISIBLE : View.GONE);
 +        editBar.setVisibility(on ? View.VISIBLE : View.GONE);
 +        tray.setVisibility(View.GONE);
 +        if (on) {
@@ -3056,8 +3252,7 @@ index 0000000..4197a98
 +    private int latchedMask = 0;
 +    private long notSwimmingSince = 0;
 +    private TextView swimToggleLabel, swimInvertLabel, stealthLabel, treeLabel, steerLabel;
-+    private boolean swimInvert, optionalStealth, treeChop, smoothSteer, ruinedTermina;
-+    private TextView ruinedLabel;
++    private boolean swimInvert, optionalStealth, treeChop, smoothSteer;
 +
 +    private void applyLatches() {
 +        int want = (latchSwim ? N64_A : 0) | (latchPower ? (N64_A | N64_R) : 0);
@@ -3146,6 +3341,7 @@ index 0000000..4197a98
 +                c.latchedPress = false;
 +                switch (c.kind) {
 +                    case KIND_WHEEL: openWheel(); break;
++                    case KIND_REST: showRest(true); break;
 +                    case KIND_POUND: startPound(); break;
 +                    case KIND_N64:
 +                        c.pressedMask = aimSwap(c.value);
@@ -3173,6 +3369,57 @@ index 0000000..4197a98
 +
 +    private long lastEditTap = 0;
 +    private Ctl selectedCtl = null;
++    private boolean snapToGrid = true;
++    private TextView snapButton;
++    private GridOverlay gridOverlay;
++
++    // The four C buttons move and resize together, like the D-pad
++    private static boolean isCButton(Ctl c) {
++        return c.id.equals("cleft") || c.id.equals("cdown") || c.id.equals("cright") || c.id.equals("cup");
++    }
++
++    private java.util.List<Ctl> groupOf(Ctl c) {
++        java.util.List<Ctl> g = new java.util.ArrayList<>();
++        if (isCButton(c)) {
++            for (Ctl o : ctls) if (isCButton(o)) g.add(o);
++        } else {
++            g.add(c);
++        }
++        return g;
++    }
++
++    // grid step in px: about 2.5% of the screen width
++    private float gridPx() {
++        return Math.max(dp(12), root.getWidth() * 0.025f);
++    }
++
++    private float snapX(float fx) {
++        if (!snapToGrid) return fx;
++        float g = gridPx(), w = root.getWidth();
++        return Math.round(fx * w / g) * g / w;
++    }
++
++    private float snapY(float fy) {
++        if (!snapToGrid) return fy;
++        float g = gridPx(), h = root.getHeight();
++        return Math.round(fy * h / g) * g / h;
++    }
++
++    // Faint grid lines behind the controls while editing (only when snapping is on)
++    private class GridOverlay extends View {
++        private final android.graphics.Paint p = new android.graphics.Paint();
++        GridOverlay() {
++            super(act);
++            p.setColor(Color.argb(40, 255, 255, 255));
++            p.setStrokeWidth(1f);
++        }
++        @Override
++        protected void onDraw(android.graphics.Canvas c) {
++            float g = gridPx(), w = getWidth(), h = getHeight();
++            for (float x = 0; x <= w; x += g) c.drawLine(x, 0, x, h, p);
++            for (float y = 0; y <= h; y += g) c.drawLine(0, y, w, y, p);
++        }
++    }
 +
 +    private float minSize(Ctl c) {
 +        switch (c.kind) {
@@ -3203,9 +3450,25 @@ index 0000000..4197a98
 +            showToast("Tap a control first");
 +            return;
 +        }
-+        selectedCtl.size = Math.max(minSize(selectedCtl), Math.min(maxSize(selectedCtl), selectedCtl.size * factor));
++        float target = Math.max(minSize(selectedCtl), Math.min(maxSize(selectedCtl), selectedCtl.size * factor));
++        if (isCButton(selectedCtl)) scaleGroup(selectedCtl, target / selectedCtl.size);
++        else selectedCtl.size = target;
 +        layoutAll();
 +        if (selectedCtl.kind == KIND_MINIMAP) pushMinimap();
++    }
++
++    // Resize the C-button group: every button grows/shrinks and the spacing scales with it
++    private void scaleGroup(Ctl c, float f) {
++        java.util.List<Ctl> g = groupOf(c);
++        float cx = 0, cy = 0;
++        for (Ctl o : g) { cx += o.x; cy += o.y; }
++        cx /= g.size();
++        cy /= g.size();
++        for (Ctl o : g) {
++            o.size = Math.max(minSize(o), Math.min(maxSize(o), o.size * f));
++            o.x = clamp(cx + (o.x - cx) * f);
++            o.y = clamp(cy + (o.y - cy) * f);
++        }
 +    }
 +
 +    private void selectCtl(Ctl c) {
@@ -3222,9 +3485,11 @@ index 0000000..4197a98
 +            case KIND_STICK: return "stick";
 +            case KIND_SKIP: return "skip button";
 +            case KIND_TRAY: return "menu button";
++            case KIND_N64: if (isCButton(c)) return "C buttons"; return c.sub.isEmpty() ? c.label : c.sub;
 +            case KIND_WHEEL: return "item wheel";
 +            case KIND_MAPVIEW: return "mini-map";
 +            case KIND_DPAD: return "D-pad shortcuts";
++            case KIND_REST: return "Rest (shows at your house door)";
 +            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
@@ -3257,10 +3522,17 @@ index 0000000..4197a98
 +                if (e.getPointerCount() >= 2 && c.pinchStartDist > 0) {
 +                    float scale = spacing(e) / c.pinchStartDist;
 +                    float min = minSize(c), max = maxSize(c);
-+                    c.size = Math.max(min, Math.min(max, c.pinchStartSize * scale));
++                    float target = Math.max(min, Math.min(max, c.pinchStartSize * scale));
++                    if (isCButton(c)) scaleGroup(c, target / c.size);
++                    else c.size = target;
 +                } else if (e.getPointerCount() == 1) {
-+                    c.x = clamp((e.getRawX() - c.dragDx) / w);
-+                    c.y = clamp((e.getRawY() - c.dragDy) / h);
++                    float nx = snapX(clamp((e.getRawX() - c.dragDx) / w));
++                    float ny = snapY(clamp((e.getRawY() - c.dragDy) / h));
++                    float ddx = nx - c.x, ddy = ny - c.y;
++                    for (Ctl o : groupOf(c)) {
++                        o.x = clamp(o.x + ddx);
++                        o.y = clamp(o.y + ddy);
++                    }
 +                }
 +                layoutAll();
 +                if (c.kind == KIND_MINIMAP) pushMinimap(); // live preview while dragging
@@ -3530,10 +3802,10 @@ index 0000000..4197a98
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..0566b3c
+index 0000000..5fa8db8
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,696 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -3876,7 +4148,7 @@ index 0000000..0566b3c
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
 +            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16,
-+            ICON_HORSE = 17;
++            ICON_HORSE = 17, ICON_MOON = 18;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -3935,6 +4207,7 @@ index 0000000..0566b3c
 +                case ICON_BUBBLE: bubble(c, s); break;
 +                case ICON_BEAM: beam(c, s); break;
 +                case ICON_HORSE: horse(c, s); break;
++                case ICON_MOON: moon(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -4065,6 +4338,17 @@ index 0000000..0566b3c
 +            p.moveTo(s * 0.32f, s * 0.5f);
 +            p.lineTo(s * 0.68f, s * 0.5f);
 +            c.drawPath(p, stroke);
++        }
++
++        // Rest: a crescent moon with a little star
++        private void moon(Canvas c, float s) {
++            p.reset();
++            p.addCircle(s * 0.46f, s * 0.52f, s * 0.3f, Path.Direction.CW);
++            Path cut = new Path();
++            cut.addCircle(s * 0.6f, s * 0.42f, s * 0.26f, Path.Direction.CW);
++            p.op(cut, Path.Op.DIFFERENCE);
++            c.drawPath(p, fill);
++            c.drawCircle(s * 0.74f, s * 0.24f, s * 0.045f, fill);
 +        }
 +
 +        // Epona: a horse head in profile
@@ -5713,10 +5997,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..e8dd6da
+index 0000000..8772d20
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2045 @@
+@@ -0,0 +1,2082 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -5758,7 +6042,6 @@ index 0000000..e8dd6da
 +#include "z64skin_matrix.h"
 +#include "z64horse.h"
 +#include "gfx.h"
-+#include "assets/objects/object_fall/object_fall.h"
 +s32 MMQuest_TakeVisitedDirty(void);
 +}
 +
@@ -5787,6 +6070,7 @@ index 0000000..e8dd6da
 +    ST_AIMING = 1 << 9,   // first-person aiming (bow, hookshot...): the overlay switches to fine aim
 +    ST_TEXT = 1 << 10,    // a conversation is on screen (skip button says "Skip text")
 +    ST_SWIMMING = 1 << 11, // in the water (Zora special = fast swim + barrier together)
++    ST_AT_HOUSE = 1 << 12, // standing at your house's door: the Rest button shows
 +};
 +
 +// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
@@ -5802,7 +6086,7 @@ index 0000000..e8dd6da
 +extern "C" volatile s32 gMmTouchOverlayActive;
 +static std::atomic<int> sTouchOnlyPause{ 1 }; // hide the original pause graphics on the Items/Masks pages
 +static std::atomic<int> sModernHud{ -1 };     // requested HUD style (1 modern bar, 0 original), applied on game thread
-+static std::atomic<int> sHud[9];
++static std::atomic<int> sHud[12]; // ... + small keys, horse carrots, skulltula tokens (-1 = not shown)
 +static std::atomic<int> sMinimapReq{ 0 };   // set when the overlay sends a new minimap placement
 +static std::atomic<int> sMinimapVals[4];    // visible, x, y (game units from the left/top), scale x100              // health, max, magic, maxMagic, rupees, maxRupees, day, time, flags
 +
@@ -5963,8 +6247,6 @@ index 0000000..e8dd6da
 +static s32 sStoppedFrames = 0;
 +static bool sTrailOn = true;
 +static bool sSkipping = false; // cutscene skip in progress
-+static bool sRuined = false;         // Ruined Termina is active
-+static bool sRuinedRedirect = false; // the moon just fell: next area change goes to Clock Town
 +
 +// ---------------------------------------------------------------- breadcrumbs (for crash reports)
 +// A small text file with what the game and the mod were doing, refreshed every few seconds and on every
@@ -6093,12 +6375,40 @@ index 0000000..e8dd6da
 +    return true;
 +}
 +
++// Triple jump (like Mario 64): jump again right as you land for a bigger jump, and a third time for a flip.
++static s32 sJumpStage = 0;      // 0 = none, 1..3 = which jump of the chain we're in
++static bool sJumpAirborne = false;
++static u32 sJumpLandFrame = 0;
++static std::atomic<int> sTripleJump{ 1 };
++
 +static void OnPlayerInputs(Input* input) {
 +    Player* player = GET_PLAYER(gPlayState);
++    if (player == nullptr) return;
++    bool grounded = player->actor.bgCheckFlags & BGCHECKFLAG_GROUND;
++    if (sJumpAirborne && grounded) {
++        sJumpAirborne = false;
++        sJumpLandFrame = gPlayState->gameplayFrames;
++        if (sJumpStage >= 3) sJumpStage = 0; // the flip ends the chain
++    }
 +
 +    if (TakeRequest(ACT_JUMP) && CanJump(player)) {
-+        func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump,
-+                      CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f), gPlayState);
++        f32 base = CVarGetFloat(CVAR_JUMP_HEIGHT, 8.0f);
++        bool chained = sTripleJump.load() && (sJumpStage > 0) && (sJumpStage < 3) &&
++                       ((gPlayState->gameplayFrames - sJumpLandFrame) <= 8) && (player->speedXZ > 3.0f);
++        sJumpStage = chained ? sJumpStage + 1 : 1;
++        if (sJumpStage == 3) {
++            // third jump: a high front flip
++            func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_fighter_front_jump, base * 1.6f, gPlayState);
++            player->speedXZ += 2.0f;
++        } else if (sJumpStage == 2) {
++            // second jump: a little higher
++            func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump, base * 1.3f, gPlayState);
++        } else {
++            func_80834DB8(player, (PlayerAnimationHeader*)&gPlayerAnim_link_normal_run_jump, base, gPlayState);
++        }
++        sJumpAirborne = true;
++    } else if (grounded && sJumpStage > 0 && (gPlayState->gameplayFrames - sJumpLandFrame) > 8 && !sJumpAirborne) {
++        sJumpStage = 0; // waited too long: the chain resets
 +    }
 +    // Sprint stays on until you turn it off yourself.
 +}
@@ -6308,7 +6618,10 @@ index 0000000..e8dd6da
 +}
 +
 +// Called at the start of Play_Init (z_play.c): apply a pending quick load before the area is built.
++static void ApplyRest();
++
 +extern "C" void MMMod_OnPlayInit(void) {
++    ApplyRest();
 +    if (!sPendingLoad || !sHaveSnap) return;
 +    sPendingLoad = false;
 +    gSaveContext.fileNum = sSnap->fileNum; // the quick save may belong to a different file slot
@@ -6522,17 +6835,6 @@ index 0000000..e8dd6da
 +static std::atomic<int> sInstantDoors{ 1 };
 +
 +extern "C" void MMMod_AdjustTransition(PlayState* play) {
-+    if (sRuinedRedirect && (play->transitionMode == TRANS_MODE_SETUP)) {
-+        // after the crash, wake up in what's left of South Clock Town
-+        sRuinedRedirect = false;
-+        play->nextEntrance = ENTRANCE(SOUTH_CLOCK_TOWN, 0);
-+        gSaveContext.nextCutsceneIndex = 0;
-+        gSaveContext.save.cutsceneIndex = 0;
-+        gSaveContext.save.day = 3;
-+        gSaveContext.save.time = CLOCK_TIME(4, 30);
-+        play->transitionType = TRANS_TYPE_FADE_BLACK_SLOW;
-+        return;
-+    }
 +    if (!sInstantDoors.load()) return;
 +    if (play->transitionMode != TRANS_MODE_SETUP) return;
 +    switch (play->transitionType) {
@@ -6894,368 +7196,373 @@ index 0000000..e8dd6da
 +    }
 +}
 +
-+// ---------------------------------------------------------------- Ruined Termina (after the moon falls)
-+// Instead of resetting, the world carries on: a frozen, ash-red last night with no moon in the sky
-+// (it's in pieces on the ground), nobody left in town, and the dead walking. Clock Town and Termina Field
-+// get an impact crater ringed with chunks of moon; everywhere else outdoors gets scattered debris.
-+// Play the Song of Time to go back to the Dawn of the First Day as usual.
-+static std::atomic<int> sRuinedEnabled{ 1 };
-+static s32 sRuinedScene = -1;
-+struct Debris {
-+    Vec3f pos;
-+    f32 scale;
-+    s16 rotX, rotY;
-+    s8 kind;      // 0 = moon piece, 1..4 = rubble rock variant
-+    f32 radius;   // footprint for collision (0 = walk-through)
-+    f32 sx, sy, sz;
++// ---------------------------------------------------------------- your house in Termina Field
++// A plain little house (where you choose to put it) with a fenced pen for Epona beside it. Stand at the
++// door to rest: pick how long, and time passes to that hour (never past the final night).
++struct HouseData {
++    u32 magic;
++    s32 valid;
++    f32 x, y, z;
++    s16 yaw;
 +};
-+static std::vector<Debris> sDebris;
-+static Vec3f sCrater;
-+static f32 sCraterRadius = 0.0f;
-+static Actor* sUndead[8] = {};
-+static s32 sUndeadTimer = 0;
-+static s32 sObjRd = -1, sObjSkb = -1;
++// one house in Termina Field and one on the beach (Great Bay Coast); sHouse is the one in this area
++static HouseData sHouses[2] = {};
++static HouseData sHouse = {};
++static s32 sHouseScene = -1;
 +
-+extern "C" s32 MMMod_OnMoonCrash(PlayState* play) {
-+    if (!sRuinedEnabled.load()) return false;
-+    sRuined = true;
-+    sRuinedRedirect = true;
-+    sRuinedScene = -1;
-+    Crumb("moon crash -> ruined termina");
-+    return true; // don't reset the save
++static s32 HouseSlot(s16 sceneId) {
++    if (sceneId == SCENE_00KEIKOKU) return 0;
++    if (sceneId == SCENE_30GYOSON) return 1;
++    return -1;
++}
++static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = place here, 2 = remove
++static std::atomic<int> sNearDoor{ 0 };
++static std::atomic<int> sRestReq{ -1 };      // hours to rest
++static bool sRestPending = false;
++static bool sEponaPenned = false;
++static u16 sRestTime = 0;
++static s32 sRestDay = 0;
++
++#define HOUSE_W 320.0f
++#define HOUSE_D 260.0f
++#define HOUSE_H 200.0f
++#define PEN_X0 (HOUSE_W / 2 + 70.0f)  // pen sits to the house's right
++#define PEN_X1 (PEN_X0 + 480.0f)
++#define PEN_Z 230.0f                    // pen spans z = -PEN_Z..PEN_Z
++#define GATE_HALF 70.0f                 // opening in the front fence
++
++static std::string HousePath() {
++    return Ship::Context::GetPathRelativeToAppDirectory("mm_house.bin");
 +}
 +
-+static bool IsTownScene(s16 id) {
-+    return id == SCENE_CLOCKTOWER || id == SCENE_TOWN || id == SCENE_BACKTOWN || id == SCENE_ICHIBA;
-+}
-+
-+static bool FloorAt(PlayState* play, f32 x, f32 z, f32 nearY, Vec3f* out) {
-+    CollisionPoly* poly;
-+    Vec3f p = { x, nearY + 600.0f, z };
-+    f32 y = BgCheck_EntityRaycastFloor1(&play->colCtx, &poly, &p);
-+    if (y <= BGCHECK_Y_MIN + 1.0f || fabsf(y - nearY) > 900.0f) return false;
-+    *out = { x, y, z };
-+    return true;
-+}
-+
-+#define MOON_MODEL_RADIUS 4000.0f // rough size of the moon model at scale 1
-+
-+static void AddMoonPiece(Vec3f p, f32 scale, s16 rx, s16 ry) {
-+    Debris d = {};
-+    d.pos = p;
-+    d.scale = scale;
-+    d.rotX = rx;
-+    d.rotY = ry;
-+    d.kind = 0;
-+    d.radius = MOON_MODEL_RADIUS * scale * 0.85f;
-+    sDebris.push_back(d);
-+}
-+
-+static void AddRubblePile(PlayState* play, Vec3f c, f32 size, u32& seed) {
-+    auto rnd = [&seed]() {
-+        seed = seed * 1664525u + 1013904223u;
-+        return (seed >> 8) / (f32)(1 << 24);
-+    };
-+    s32 n = 3 + (s32)(rnd() * 5);
-+    for (s32 i = 0; i < n; i++) {
-+        f32 a = rnd() * 2.0f * M_PI, d = rnd() * size;
-+        Vec3f p;
-+        if (!FloorAt(play, c.x + cosf(a) * d, c.z + sinf(a) * d, c.y, &p)) continue;
-+        Debris r = {};
-+        f32 base = size * (0.25f + rnd() * 0.45f) * (i == 0 ? 1.4f : 1.0f);
-+        r.pos = p;
-+        r.kind = 1 + (s8)(rnd() * 4);
-+        r.rotX = (s16)(rnd() * 0xFFFF);
-+        r.rotY = (s16)(rnd() * 0xFFFF);
-+        r.sx = base * (0.8f + rnd() * 0.6f);
-+        r.sy = base * (0.5f + rnd() * 0.5f);
-+        r.sz = base * (0.8f + rnd() * 0.6f);
-+        r.pos.y -= r.sy * 0.25f; // settled into the ground
-+        r.radius = (r.sx > 45.0f) ? r.sx * 0.8f : 0.0f;
-+        sDebris.push_back(r);
++static void LoadHouse() {
++    std::ifstream f(HousePath(), std::ios::binary);
++    HouseData h[2] = {};
++    if (f && f.read((char*)h, sizeof(h))) {
++        for (int i = 0; i < 2; i++) {
++            if (h[i].magic == 0x48534532) sHouses[i] = h[i];
++        }
 +    }
 +}
 +
-+static void PlaceDebris(PlayState* play) {
-+    sDebris.clear();
-+    sCraterRadius = 0.0f;
-+    Player* player = GET_PLAYER(play);
-+    if (player == nullptr || play->skyboxId == SKYBOX_NONE) return; // indoors: just empty and dark
-+    u32 seed = 0x9E3779B9u ^ (u32)play->sceneId;
-+    auto rnd = [&seed]() {
-+        seed = seed * 1664525u + 1013904223u;
-+        return (seed >> 8) / (f32)(1 << 24);
-+    };
-+    Vec3f base = player->actor.world.pos;
-+    bool town = IsTownScene(play->sceneId);
-+    bool field = (play->sceneId == SCENE_00KEIKOKU);
-+    if (town || field) {
-+        // the impact: in town, the middle of the area; in the field, between Link and Clock Town
-+        Vec3f c = { 0.0f, base.y, 0.0f };
-+        if (field) {
-+            f32 len = sqrtf(base.x * base.x + base.z * base.z);
-+            f32 k = len > 1.0f ? 2200.0f / len : 0.0f;
-+            c.x = base.x * k;
-+            c.z = base.z * k;
-+        }
-+        if (FloorAt(play, c.x, c.z, base.y, &sCrater)) {
-+            // the moon itself, huge, broken, half sunk in its crater...
-+            f32 moon = field ? 0.32f : 0.14f;
-+            sCraterRadius = MOON_MODEL_RADIUS * moon * 1.6f;
-+            AddMoonPiece(sCrater, moon, 0x3000, (s16)(rnd() * 0xFFFF));
-+            // ...with great pieces of it broken off around it
-+            s32 pieces = field ? 5 : 3;
-+            for (s32 i = 0; i < pieces; i++) {
-+                f32 a = (i / (f32)pieces) * 2.0f * M_PI + rnd() * 0.6f;
-+                f32 d = MOON_MODEL_RADIUS * moon * (1.15f + rnd() * 0.5f);
-+                Vec3f p;
-+                if (FloorAt(play, sCrater.x + cosf(a) * d, sCrater.z + sinf(a) * d, sCrater.y, &p)) {
-+                    AddMoonPiece(p, moon * (0.25f + rnd() * 0.2f), (s16)(rnd() * 0xFFFF), (s16)(rnd() * 0xFFFF));
-+                }
-+            }
-+            // a field of rubble thrown out by the impact
-+            s32 piles = field ? 26 : 14;
-+            for (s32 i = 0; i < piles; i++) {
-+                f32 a = rnd() * 2.0f * M_PI;
-+                f32 d = sCraterRadius * (0.7f + rnd() * 1.1f);
-+                Vec3f p;
-+                if (FloorAt(play, sCrater.x + cosf(a) * d, sCrater.z + sinf(a) * d, sCrater.y, &p)) {
-+                    AddRubblePile(play, p, field ? 160.0f : 110.0f, seed);
-+                }
++static void SaveHouse(s32 slot) {
++    sHouse.magic = 0x48534532;
++    if (slot >= 0) sHouses[slot] = sHouse;
++    std::ofstream f(HousePath(), std::ios::binary | std::ios::trunc);
++    if (f) f.write((const char*)sHouses, sizeof(sHouses));
++}
++
++static bool HouseHere(PlayState* play) {
++    return sHouse.valid && (HouseSlot(play->sceneId) >= 0) && (sHouseScene == play->sceneId);
++}
++
++// world <-> house-local (house faces +Z, door at the front centre)
++static void ToLocal(const Vec3f* w, f32* lx, f32* lz) {
++    f32 dx = w->x - sHouse.x, dz = w->z - sHouse.z;
++    f32 s = Math_SinS(sHouse.yaw), c = Math_CosS(sHouse.yaw);
++    *lx = dx * c - dz * s;
++    *lz = dx * s + dz * c;
++}
++
++static void FromLocalDelta(f32 lx, f32 lz, f32* wx, f32* wz) {
++    f32 s = Math_SinS(sHouse.yaw), c = Math_CosS(sHouse.yaw);
++    *wx = lx * c + lz * s;
++    *wz = -lx * s + lz * c;
++}
++
++// Mesh builder: quads with baked vertex colours, emitted in vertex-cache-sized batches
++struct MeshBuilder {
++    std::vector<Vtx> vtx;
++    void quad(f32 ax, f32 ay, f32 az, f32 bx, f32 by, f32 bz, f32 cx, f32 cy, f32 cz, f32 dx, f32 dy, f32 dz, u8 r,
++              u8 g, u8 b) {
++        vtx.push_back((Vtx)VTX((s16)ax, (s16)ay, (s16)az, 0, 0, r, g, b, 255));
++        vtx.push_back((Vtx)VTX((s16)bx, (s16)by, (s16)bz, 0, 0, r, g, b, 255));
++        vtx.push_back((Vtx)VTX((s16)cx, (s16)cy, (s16)cz, 0, 0, r, g, b, 255));
++        vtx.push_back((Vtx)VTX((s16)dx, (s16)dy, (s16)dz, 0, 0, r, g, b, 255));
++    }
++    // axis-aligned box, faces shaded so it reads as lit from above-front
++    void box(f32 x0, f32 y0, f32 z0, f32 x1, f32 y1, f32 z1, u8 r, u8 g, u8 b) {
++        auto k = [&](f32 m) { return (u8)MIN(255, (s32)(r * m)); };
++        auto kg = [&](f32 m) { return (u8)MIN(255, (s32)(g * m)); };
++        auto kb = [&](f32 m) { return (u8)MIN(255, (s32)(b * m)); };
++        quad(x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, k(1.0f), kg(1.0f), kb(1.0f));      // front
++        quad(x1, y0, z0, x0, y0, z0, x0, y1, z0, x1, y1, z0, k(0.6f), kg(0.6f), kb(0.6f));      // back
++        quad(x0, y0, z0, x0, y0, z1, x0, y1, z1, x0, y1, z0, k(0.78f), kg(0.78f), kb(0.78f));   // left
++        quad(x1, y0, z1, x1, y0, z0, x1, y1, z0, x1, y1, z1, k(0.85f), kg(0.85f), kb(0.85f));   // right
++        quad(x0, y1, z1, x1, y1, z1, x1, y1, z0, x0, y1, z0, k(1.1f), kg(1.1f), kb(1.1f));      // top
++    }
++    std::vector<Gfx> build() {
++        // (some display-list macros write more than one command, so go through a small buffer)
++        std::vector<Gfx> dl;
++        Gfx tmp[8];
++        auto flush = [&](Gfx* end) { dl.insert(dl.end(), tmp, end); };
++        size_t quads = vtx.size() / 4;
++        for (size_t q0 = 0; q0 < quads; q0 += 7) { // 7 quads = 28 vertices per batch
++            size_t n = MIN((size_t)7, quads - q0);
++            Gfx* gp = tmp;
++            gSPVertex(gp++, (uintptr_t)&vtx[q0 * 4], (s32)(n * 4), 0);
++            flush(gp);
++            for (size_t i = 0; i < n; i++) {
++                s32 v = (s32)i * 4;
++                gp = tmp;
++                gSP2Triangles(gp++, v, v + 1, v + 2, 0, v, v + 2, v + 3, 0);
++                flush(gp);
 +            }
 +        }
++        Gfx* gp = tmp;
++        gSPEndDisplayList(gp++);
++        flush(gp);
++        return dl;
 +    }
-+    // rubble scattered everywhere outdoors (streets, fields, paths)
-+    s32 scatter = town ? 34 : (field ? 30 : 16);
-+    for (s32 i = 0; i < scatter; i++) {
-+        f32 a = rnd() * 2.0f * M_PI, d = 200.0f + rnd() * (town ? 1100.0f : 2200.0f);
-+        Vec3f p;
-+        if (FloorAt(play, base.x + cosf(a) * d, base.z + sinf(a) * d, base.y, &p)) {
-+            AddRubblePile(play, p, town ? 90.0f : 120.0f, seed);
-+        }
++};
++
++static MeshBuilder sHouseMesh;
++static std::vector<Gfx> sHouseDL;
++
++static void BuildHouse() {
++    if (!sHouseDL.empty()) return;
++    MeshBuilder& m = sHouseMesh;
++    f32 w = HOUSE_W / 2, d = HOUSE_D / 2, h = HOUSE_H;
++    // stone base, plaster walls, timber corners
++    m.box(-w - 6, 0, -d - 6, w + 6, 24, d + 6, 128, 122, 112);
++    m.box(-w, 24, -d, w, h, d, 226, 214, 188);
++    for (f32 sx : { -w, w }) {
++        for (f32 sz : { -d, d }) m.box(sx - 9, 24, sz - 9, sx + 9, h, sz + 9, 118, 80, 46);
++    }
++    m.box(-w - 8, h - 14, -d - 8, w + 8, h, d + 8, 118, 80, 46); // top beam
++    // door, frame and windows
++    m.box(-44, 24, d, 44, 150, d + 6, 92, 60, 34);
++    m.box(-52, 150, d, 52, 162, d + 8, 118, 80, 46);
++    for (f32 wx : { -110.0f, 110.0f }) {
++        m.box(wx - 32, 90, d, wx + 32, 150, d + 4, 52, 66, 86);   // glass
++        m.box(wx - 38, 84, d, wx + 38, 90, d + 7, 118, 80, 46);   // sill
++    }
++    // roof: two sloped planks plus gable ends
++    f32 peak = h + 120, o = 30;
++    m.quad(-w - o, h - 6, d + o, w + o, h - 6, d + o, w + o, peak, 0, -w - o, peak, 0, 168, 70, 50);       // front slope
++    m.quad(w + o, h - 6, -d - o, -w - o, h - 6, -d - o, -w - o, peak, 0, w + o, peak, 0, 120, 48, 36);     // back slope
++    m.quad(-w, h, d, w, h, d, 0, peak - 4, 0, 0, peak - 4, 0, 214, 200, 172);                               // front gable
++    m.quad(w, h, -d, -w, h, -d, 0, peak - 4, 0, 0, peak - 4, 0, 170, 158, 136);                             // back gable
++    m.box(w * 0.45f, peak - 70, -40, w * 0.45f + 40, peak + 30, 0, 120, 112, 104);                          // chimney
++    m.box(-w - 4, 36, -112, -w, 190, 112, 96, 64, 38);                                                          // mask board (left wall)
++    m.box(-w - 6, 186, -116, -w, 194, 116, 70, 46, 26);                                                         // its top trim
++    // Epona's pen: posts and two rails, with a gate gap in the front
++    f32 x0 = PEN_X0, x1 = PEN_X1, z0 = -PEN_Z, z1 = PEN_Z;
++    f32 cx = (x0 + x1) / 2;
++    for (f32 x = x0; x <= x1 + 1; x += 96) {
++        m.box(x - 7, 0, z0 - 7, x + 7, 80, z0 + 7, 120, 84, 50);
++        if (fabsf(x - cx) > GATE_HALF) m.box(x - 7, 0, z1 - 7, x + 7, 80, z1 + 7, 120, 84, 50);
++    }
++    for (f32 z = z0 + 92; z < z1; z += 92) {
++        m.box(x0 - 7, 0, z - 7, x0 + 7, 80, z + 7, 120, 84, 50);
++        m.box(x1 - 7, 0, z - 7, x1 + 7, 80, z + 7, 120, 84, 50);
++    }
++    m.box(cx - GATE_HALF - 7, 0, z1 - 7, cx - GATE_HALF + 7, 90, z1 + 7, 110, 76, 44); // gate posts
++    m.box(cx + GATE_HALF - 7, 0, z1 - 7, cx + GATE_HALF + 7, 90, z1 + 7, 110, 76, 44);
++    for (f32 ry : { 38.0f, 66.0f }) {
++        m.box(x0, ry, z0 - 3, x1, ry + 8, z0 + 3, 150, 108, 66);               // back rail
++        m.box(x0 - 3, ry, z0, x0 + 3, ry + 8, z1, 150, 108, 66);               // left rail
++        m.box(x1 - 3, ry, z0, x1 + 3, ry + 8, z1, 150, 108, 66);               // right rail
++        m.box(x0, ry, z1 - 3, cx - GATE_HALF, ry + 8, z1 + 3, 150, 108, 66);   // front rails either side of the gate
++        m.box(cx + GATE_HALF, ry, z1 - 3, x1, ry + 8, z1 + 3, 150, 108, 66);
++    }
++    m.box(x0 + 30, 0, z0 + 30, x0 + 110, 30, z0 + 70, 112, 90, 60); // water trough
++    m.box(x0 + 36, 22, z0 + 36, x0 + 104, 28, z0 + 64, 70, 110, 150);
++    sHouseDL = m.build();
++}
++
++// Mask wall: a timber board on the house's left wall with every mask you own hung on it (6 x 4)
++#define MASK_BOARD_X (-HOUSE_W / 2 - 4.0f)
++static Vtx sMaskVtx[24][4];
++static bool sMaskVtxBuilt = false;
++
++static void BuildMaskVtx() {
++    if (sMaskVtxBuilt) return;
++    sMaskVtxBuilt = true;
++    for (int i = 0; i < 24; i++) {
++        int col = i % 6, row = i / 6;
++        f32 z0 = 105.0f - col * 36.0f, y0 = 176.0f - row * 36.0f; // the board faces -X, so +Z is to the left
++        f32 x = MASK_BOARD_X - 5.0f;
++        sMaskVtx[i][0] = (Vtx)VTX((s16)x, (s16)(y0 - 30), (s16)z0, 0, 32 << 5, 255, 255, 255, 255);
++        sMaskVtx[i][1] = (Vtx)VTX((s16)x, (s16)(y0 - 30), (s16)(z0 - 30), 32 << 5, 32 << 5, 255, 255, 255, 255);
++        sMaskVtx[i][2] = (Vtx)VTX((s16)x, (s16)y0, (s16)(z0 - 30), 32 << 5, 0, 255, 255, 255, 255);
++        sMaskVtx[i][3] = (Vtx)VTX((s16)x, (s16)y0, (s16)z0, 0, 0, 255, 255, 255, 255);
 +    }
 +}
 +
-+// Rubble rocks: four lumpy low-poly stones (jittered icosahedra) with baked light/dark shading
-+static Vtx sRockVtx[4][12];
-+static Gfx sRockDL[4][16];
-+static bool sRocksBuilt = false;
-+
-+static void BuildRocks() {
-+    if (sRocksBuilt) return;
-+    sRocksBuilt = true;
-+    static const f32 t = 1.618f;
-+    static const f32 ico[12][3] = { { -1, t, 0 }, { 1, t, 0 }, { -1, -t, 0 }, { 1, -t, 0 }, { 0, -1, t }, { 0, 1, t },
-+                                     { 0, -1, -t }, { 0, 1, -t }, { t, 0, -1 }, { t, 0, 1 }, { -t, 0, -1 }, { -t, 0, 1 } };
-+    static const u8 faces[20][3] = { { 0, 11, 5 }, { 0, 5, 1 }, { 0, 1, 7 }, { 0, 7, 10 }, { 0, 10, 11 },
-+                                      { 1, 5, 9 }, { 5, 11, 4 }, { 11, 10, 2 }, { 10, 7, 6 }, { 7, 1, 8 },
-+                                      { 3, 9, 4 }, { 3, 4, 2 }, { 3, 2, 6 }, { 3, 6, 8 }, { 3, 8, 9 },
-+                                      { 4, 9, 5 }, { 2, 4, 11 }, { 6, 2, 10 }, { 8, 6, 7 }, { 9, 8, 1 } };
-+    // stone grey, dusty plaster, dark ash, scorched brown
-+    static const u8 tint[4][3] = { { 120, 116, 110 }, { 168, 150, 120 }, { 70, 64, 60 }, { 110, 80, 56 } };
-+    u32 seed = 1234567;
-+    for (int v = 0; v < 4; v++) {
-+        for (int i = 0; i < 12; i++) {
-+            seed = seed * 1664525u + 1013904223u;
-+            f32 j = 0.7f + ((seed >> 8) & 0xFFFF) / 65535.0f * 0.6f; // lumpiness
-+            f32 x = ico[i][0] / 1.9f * j, y = ico[i][1] / 1.9f * j, z = ico[i][2] / 1.9f * j;
-+            f32 light = 0.55f + 0.45f * (y * 0.5f + 0.5f);            // lighter on top
-+            sRockVtx[v][i] = (Vtx)VTX((s16)(x * 100), (s16)(y * 100), (s16)(z * 100), 0, 0,
-+                                      (u8)(tint[v][0] * light), (u8)(tint[v][1] * light), (u8)(tint[v][2] * light), 255);
-+        }
-+        Gfx* g = sRockDL[v];
-+        gSPVertex(g++, (uintptr_t)sRockVtx[v], 12, 0);
-+        for (int f = 0; f < 20; f += 2) {
-+            gSP2Triangles(g++, faces[f][0], faces[f][1], faces[f][2], 0, faces[f + 1][0], faces[f + 1][1],
-+                          faces[f + 1][2], 0);
-+        }
-+        gSPEndDisplayList(g++);
-+    }
-+}
-+
-+// Keep Link out of the big moon pieces and large rocks (simple push-out, no level geometry needed)
-+static void CollideWithDebris(PlayState* play) {
-+    Player* player = GET_PLAYER(play);
-+    if (player == nullptr) return;
-+    Vec3f* lp = &player->actor.world.pos;
-+    for (auto& d : sDebris) {
-+        if (d.radius <= 0.0f) continue;
-+        f32 top = (d.kind == 0) ? d.pos.y + MOON_MODEL_RADIUS * d.scale * 0.6f : d.pos.y + d.sy;
-+        if (lp->y > top) continue;
-+        f32 dx = lp->x - d.pos.x, dz = lp->z - d.pos.z;
-+        f32 dist = sqrtf(dx * dx + dz * dz);
-+        if (dist < d.radius && dist > 0.01f) {
-+            f32 push = d.radius - dist;
-+            lp->x += dx / dist * push;
-+            lp->z += dz / dist * push;
-+        }
-+    }
-+}
-+
-+// 12 segments: centre + inner ring + faded outer ring = 25 vertices (fits the vertex cache)
-+#define CRATER_SEG 12
-+static Vtx sCraterVtx[1 + 2 * CRATER_SEG];
-+static Gfx sCraterDL[4 + 2 * CRATER_SEG];
-+static bool sCraterBuilt = false;
-+
-+static void BuildCrater() {
-+    if (sCraterBuilt) return;
-+    sCraterBuilt = true;
-+    sCraterVtx[0] = (Vtx)VTX(0, 3, 0, 0, 0, 18, 10, 8, 235);
-+    for (int i = 0; i < CRATER_SEG; i++) {
-+        f32 a = i * (2.0f * M_PI / CRATER_SEG);
-+        sCraterVtx[1 + i] = (Vtx)VTX((s16)(cosf(a) * 60), 3, (s16)(sinf(a) * 60), 0, 0, 28, 16, 12, 220);
-+        sCraterVtx[1 + CRATER_SEG + i] = (Vtx)VTX((s16)(cosf(a) * 100), 3, (s16)(sinf(a) * 100), 0, 0, 50, 34, 24, 0);
-+    }
-+    Gfx* g = sCraterDL;
-+    gSPVertex(g++, (uintptr_t)sCraterVtx, 1 + 2 * CRATER_SEG, 0);
-+    for (int i = 0; i < CRATER_SEG; i++) {
-+        int j = (i + 1) % CRATER_SEG;
-+        int in_i = 1 + i, in_j = 1 + j, out_i = 1 + CRATER_SEG + i, out_j = 1 + CRATER_SEG + j;
-+        gSP2Triangles(g++, 0, in_i, in_j, 0, in_i, out_i, out_j, 0); // dark centre + fading edge
-+        gSP1Triangle(g++, in_i, out_j, in_j, 0);
-+    }
-+    gSPEndDisplayList(g++);
-+}
-+
-+static void DrawRuins() {
-+    PlayState* play = gPlayState;
-+    if (!sRuined || play == nullptr || play->sceneId != sRuinedScene) return;
++static void DrawMaskWall(PlayState* play) {
++    BuildMaskVtx();
 +    OPEN_DISPS(play->state.gfxCtx);
-+    if (sCraterRadius > 0.0f) {
-+        BuildCrater();
-+        Gfx_SetupDL25_Xlu(play->state.gfxCtx);
-+        gSPClearGeometryMode(POLY_XLU_DISP++, G_LIGHTING | G_CULL_BACK);
-+        gDPSetCombineMode(POLY_XLU_DISP++, G_CC_SHADE, G_CC_SHADE);
-+        Matrix_Translate(sCrater.x, sCrater.y, sCrater.z, MTXMODE_NEW);
-+        Matrix_Scale(sCraterRadius / 100.0f, 1.0f, sCraterRadius / 100.0f, MTXMODE_APPLY);
-+        MATRIX_FINALIZE_AND_LOAD(POLY_XLU_DISP++, play->state.gfxCtx);
-+        gSPDisplayList(POLY_XLU_DISP++, sCraterDL);
-+    }
-+    if (!sDebris.empty()) {
-+        BuildRocks();
-+        // rubble
-+        Gfx_SetupDL25_Opa(play->state.gfxCtx);
-+        gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING);
-+        gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
-+        for (auto& d : sDebris) {
-+            if (d.kind == 0) continue;
-+            Matrix_Translate(d.pos.x, d.pos.y, d.pos.z, MTXMODE_NEW);
-+            Matrix_RotateYS(d.rotY, MTXMODE_APPLY);
-+            Matrix_RotateXS(d.rotX >> 3, MTXMODE_APPLY); // a slight tilt
-+            Matrix_Scale(d.sx / 100.0f, d.sy / 100.0f, d.sz / 100.0f, MTXMODE_APPLY);
-+            MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+            gSPDisplayList(POLY_OPA_DISP++, sRockDL[d.kind - 1]);
-+        }
-+        // the moon and its broken pieces (lit normally)
-+        Gfx_SetupDL25_Opa(play->state.gfxCtx);
-+        gDPSetPrimColor(POLY_OPA_DISP++, 0, 0x80, 40, 40, 40, 255); // dead, unlit eyes
-+        for (auto& d : sDebris) {
-+            if (d.kind != 0) continue;
-+            Matrix_Translate(d.pos.x, d.pos.y - MOON_MODEL_RADIUS * d.scale * 0.35f, d.pos.z, MTXMODE_NEW);
-+            Matrix_RotateYS(d.rotY, MTXMODE_APPLY);
-+            Matrix_RotateXS(d.rotX, MTXMODE_APPLY);
-+            Matrix_Scale(d.scale, d.scale, d.scale, MTXMODE_APPLY);
-+            MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+            gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gMoonDL);
-+        }
++    Gfx_SetupDL25_Opa(play->state.gfxCtx);
++    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
++    gDPSetRenderMode(POLY_OPA_DISP++, G_RM_AA_ZB_TEX_EDGE, G_RM_AA_ZB_TEX_EDGE2);
++    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_DECALRGBA, G_CC_DECALRGBA);
++    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
++    Matrix_Translate(sHouse.x, sHouse.y, sHouse.z, MTXMODE_NEW);
++    Matrix_RotateYS(sHouse.yaw, MTXMODE_APPLY);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    for (int i = 0; i < 24; i++) {
++        u8 item = gSaveContext.save.saveInfo.inventory.items[ITEM_NUM_SLOTS + i];
++        if (item == ITEM_NONE || item >= 131 || gItemIcons[item] == NULL) continue;
++        gDPLoadTextureBlock(POLY_OPA_DISP++, gItemIcons[item], G_IM_FMT_RGBA, G_IM_SIZ_32b, 32, 32, 0,
++                            G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK,
++                            G_TX_NOLOD, G_TX_NOLOD);
++        gSPVertex(POLY_OPA_DISP++, (uintptr_t)sMaskVtx[i], 4, 0);
++        gSP2Triangles(POLY_OPA_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
 +    }
 +    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
-+static void UpdateRuins(PlayState* play) {
-+    if (!sRuined) return;
-+    // Song of Time (or loading another save) starts a new cycle: the ruins are gone
-+    if (gSaveContext.save.day != 3 && !sRuinedRedirect) {
-+        sRuined = false;
-+        sDebris.clear();
-+        return;
++static void DrawWorldExtras() {
++    PlayState* play = gPlayState;
++    if (play == nullptr || !HouseHere(play)) return;
++    BuildHouse();
++    OPEN_DISPS(play->state.gfxCtx);
++    Gfx_SetupDL25_Opa(play->state.gfxCtx);
++    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
++    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_SHADE, G_CC_SHADE);
++    Matrix_Translate(sHouse.x, sHouse.y, sHouse.z, MTXMODE_NEW);
++    Matrix_RotateYS(sHouse.yaw, MTXMODE_APPLY);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    gSPDisplayList(POLY_OPA_DISP++, sHouseDL.data());
++    CLOSE_DISPS(play->state.gfxCtx);
++    DrawMaskWall(play);
++}
++
++// push a point out of the house walls and the pen's fences
++static bool PushOut(Vec3f* pos) {
++    f32 lx, lz;
++    ToLocal(pos, &lx, &lz);
++    if (pos->y > sHouse.y + HOUSE_H + 100) return false;
++    f32 olx = lx, olz = lz;
++    f32 hw = HOUSE_W / 2 + 22, hd = HOUSE_D / 2 + 22;
++    if (fabsf(lx) < hw && fabsf(lz) < hd) {
++        f32 px = hw - fabsf(lx), pz = hd - fabsf(lz);
++        if (px < pz) lx = (lx < 0 ? -hw : hw);
++        else lz = (lz < 0 ? -hd : hd);
 +    }
-+    if (gSaveContext.gameMode != GAMEMODE_NORMAL) return;
++    // fences: four sides, front has the gate gap
++    f32 cx = (PEN_X0 + PEN_X1) / 2, t = 18.0f;
++    auto wallX = [&](f32 x, f32 za, f32 zb) { // vertical fence at x from za..zb
++        if (lz > za - t && lz < zb + t && fabsf(lx - x) < t) lx = (lx < x) ? x - t : x + t;
++    };
++    auto wallZ = [&](f32 z, f32 xa, f32 xb) {
++        if (lx > xa - t && lx < xb + t && fabsf(lz - z) < t) lz = (lz < z) ? z - t : z + t;
++    };
++    wallX(PEN_X0, -PEN_Z, PEN_Z);
++    wallX(PEN_X1, -PEN_Z, PEN_Z);
++    wallZ(-PEN_Z, PEN_X0, PEN_X1);
++    wallZ(PEN_Z, PEN_X0, cx - GATE_HALF);
++    wallZ(PEN_Z, cx + GATE_HALF, PEN_X1);
++    if (lx == olx && lz == olz) return false;
++    f32 wx, wz;
++    FromLocalDelta(lx - olx, lz - olz, &wx, &wz);
++    pos->x += wx;
++    pos->z += wz;
++    return true;
++}
 +
-+    // the last night never ends
-+    gSaveContext.save.day = 3;
-+    gSaveContext.save.time = CLOCK_TIME(4, 30);
-+    gSaveContext.save.isNight = true;
-+    gSaveContext.timerStates[TIMER_ID_MOON_CRASH] = TIMER_STATE_OFF;
-+
-+    if (play->sceneId != sRuinedScene) {
-+        sRuinedScene = play->sceneId;
-+        for (auto& u : sUndead) u = nullptr;
-+        sUndeadTimer = 30;
-+        sObjRd = sObjSkb = -1;
-+        PlaceDebris(play);
-+    }
-+    CollideWithDebris(play);
-+
-+    // no moon in the sky, and nobody left
-+    for (s32 cat = 0; cat < ACTORCAT_MAX; cat++) {
-+        for (Actor* a = play->actorCtx.actorLists[cat].first; a != nullptr; a = a->next) {
-+            if (a->id == ACTOR_EN_FALL) Actor_Kill(a);
-+            else if (cat == ACTORCAT_NPC) Actor_Kill(a);
-+        }
-+    }
-+
-+    // ash-red sky and close fog outdoors, dim and cold indoors
-+    EnvironmentContext* env = &play->envCtx;
-+    bool outdoors = play->skyboxId != SKYBOX_NONE;
-+    env->adjLightSettings.ambientColor[0] = outdoors ? 30 : -10;
-+    env->adjLightSettings.ambientColor[1] = -25;
-+    env->adjLightSettings.ambientColor[2] = -35;
-+    env->adjLightSettings.light1Color[0] = outdoors ? 60 : 0;
-+    env->adjLightSettings.light1Color[1] = -10;
-+    env->adjLightSettings.light1Color[2] = -40;
-+    env->adjLightSettings.fogColor[0] = outdoors ? 90 : 10;
-+    env->adjLightSettings.fogColor[1] = outdoors ? 20 : 0;
-+    env->adjLightSettings.fogColor[2] = -20;
-+    env->adjLightSettings.fogNear = outdoors ? -180 : -60;
-+
++static void UpdateHouse(PlayState* play) {
 +    Player* player = GET_PLAYER(play);
-+    if (player == nullptr || !outdoors) return;
-+
-+    // drifting embers
-+    if ((play->gameplayFrames % 2) == 0) {
-+        static Vec3f vel = { 0.0f, 0.6f, 0.0f }, acc = { 0.0f, 0.02f, 0.0f };
-+        static Color_RGBA8 prim = { 255, 170, 60, 255 }, envc = { 255, 60, 0, 0 };
-+        Vec3f p = player->actor.world.pos;
-+        p.x += Rand_CenteredFloat(900.0f);
-+        p.z += Rand_CenteredFloat(900.0f);
-+        p.y += Rand_ZeroFloat(250.0f);
-+        EffectSsKirakira_SpawnDispersed(play, &p, &vel, &acc, &prim, &envc, 2500, 60);
++    s32 slot = HouseSlot(play->sceneId);
++    if (play->sceneId != sHouseScene) {
++        sHouseScene = play->sceneId;
++        sHouse = (slot >= 0) ? sHouses[slot] : HouseData{};
++        sEponaPenned = false;
 +    }
-+
-+    // the dead walk: keep a few ReDeads, Gibdos and Stalchildren around
-+    if (sObjRd < 0) sObjRd = Object_GetSlot(&play->objectCtx, OBJECT_RD);
-+    if (sObjRd < 0) sObjRd = Object_SpawnPersistent(&play->objectCtx, OBJECT_RD);
-+    if (sObjSkb < 0) sObjSkb = Object_GetSlot(&play->objectCtx, OBJECT_SKB);
-+    if (sObjSkb < 0) sObjSkb = Object_SpawnPersistent(&play->objectCtx, OBJECT_SKB);
-+    if (--sUndeadTimer > 0) return;
-+    sUndeadTimer = 90;
-+    s32 cap = IsTownScene(play->sceneId) ? 4 : 6;
-+    s32 alive = 0;
-+    for (auto& u : sUndead) {
-+        if (u != nullptr && u->update == nullptr) u = nullptr; // killed
-+        if (u != nullptr) alive++;
-+    }
-+    if (alive >= cap) return;
-+    for (auto& u : sUndead) {
-+        if (u != nullptr) continue;
-+        f32 a = Rand_ZeroFloat(2.0f * M_PI), d = 500.0f + Rand_ZeroFloat(700.0f);
-+        Vec3f p;
-+        if (!FloorAt(play, player->actor.world.pos.x + cosf(a) * d, player->actor.world.pos.z + sinf(a) * d,
-+                     player->actor.world.pos.y, &p)) {
-+            break;
++    int req = sHousePlaceReq.exchange(0);
++    if (req == 1) {
++        if (slot < 0 || player == nullptr) {
++            PostMessage("Houses can go in Termina Field or on the Great Bay beach");
++        } else {
++            // the house goes just in front of Link, facing him
++            sHouse.valid = true;
++            sHouse.yaw = player->actor.shape.rot.y + 0x8000;
++            sHouse.x = player->actor.world.pos.x + Math_SinS(player->actor.shape.rot.y) * (HOUSE_D / 2 + 120);
++            sHouse.z = player->actor.world.pos.z + Math_CosS(player->actor.shape.rot.y) * (HOUSE_D / 2 + 120);
++            sHouse.y = player->actor.world.pos.y;
++            CollisionPoly* poly;
++            Vec3f probe = { sHouse.x, sHouse.y + 300, sHouse.z };
++            f32 fy = BgCheck_EntityRaycastFloor1(&play->colCtx, &poly, &probe);
++            if (fy > BGCHECK_Y_MIN + 1) sHouse.y = fy;
++            SaveHouse(slot);
++            Audio_PlaySfx(NA_SE_SY_DECIDE);
++            PostMessage("Your house is built!");
 +        }
-+        f32 pick = Rand_ZeroOne();
-+        if (pick < 0.65f && sObjRd >= 0 && Object_IsLoaded(&play->objectCtx, sObjRd)) {
-+            // ReDeads, some as Gibdos
-+            s16 type = (pick < 0.35f) ? 1 : 0xFE;
-+            u = Actor_Spawn(&play->actorCtx, play, ACTOR_EN_RD, p.x, p.y, p.z, 0, (s16)(a * 10430.0f), 0, type);
-+        } else if (sObjSkb >= 0 && Object_IsLoaded(&play->objectCtx, sObjSkb)) {
-+            u = Actor_Spawn(&play->actorCtx, play, ACTOR_EN_SKB, p.x, p.y, p.z, 0, (s16)(a * 10430.0f), 0, 0);
++    } else if (req == 2) {
++        if (slot >= 0) {
++            sHouse.valid = false;
++            SaveHouse(slot);
++            PostMessage("House removed");
 +        }
-+        break; // one at a time
 +    }
++    sNearDoor = 0;
++    if (!HouseHere(play) || player == nullptr) return;
++
++    PushOut(&player->actor.world.pos);
++    if (player->rideActor != nullptr) PushOut(&player->rideActor->world.pos);
++
++    // Epona waits in her pen when you arrive (if she's with you in this area)
++    for (Actor* a = play->actorCtx.actorLists[ACTORCAT_BG].first; a != nullptr; a = a->next) {
++        if (a->id != ACTOR_EN_HORSE || a == player->rideActor) continue;
++        if (!sEponaPenned && play->gameplayFrames > 10) {
++            f32 wx, wz;
++            FromLocalDelta((PEN_X0 + PEN_X1) / 2, 0.0f, &wx, &wz);
++            a->world.pos = { sHouse.x + wx, sHouse.y, sHouse.z + wz };
++            a->home.pos = a->world.pos;
++            a->prevPos = a->world.pos;
++            sEponaPenned = true;
++        }
++        PushOut(&a->world.pos);
++    }
++
++    // near the front door, on foot?
++    f32 lx, lz;
++    ToLocal(&player->actor.world.pos, &lx, &lz);
++    sNearDoor = (fabsf(lx) < 70.0f) && (lz > HOUSE_D / 2) && (lz < HOUSE_D / 2 + 110.0f) &&
++                (player->rideActor == nullptr) && !Play_InCsMode(play);
++
++    int hours = sRestReq.exchange(-1);
++    if (hours > 0 && sNearDoor) {
++        // work out the new day/time, never past 5 AM on the final day
++        s32 day = gSaveContext.save.day;
++        s32 mins = (s32)((u16)(gSaveContext.save.time - CLOCK_TIME(6, 0)) * (24 * 60) / 0x10000); // since 6 AM
++        s32 total = (day - 1) * 24 * 60 + mins + hours * 60;
++        s32 cap = 2 * 24 * 60 + 23 * 60;                     // day 3, 5:00 AM
++        if (total > cap) total = cap;
++        sRestDay = 1 + total / (24 * 60);
++        s32 inDay = total % (24 * 60);
++        sRestTime = (u16)(CLOCK_TIME(6, 0) + (u16)(inDay * 0x10000 / (24 * 60)));
++        sRestPending = true;
++        // fade out and come back out of the front door
++        Vec3f door = { 0, 0, HOUSE_D / 2 + 60 };
++        f32 wx, wz;
++        FromLocalDelta(door.x, door.z, &wx, &wz);
++        RespawnData* r = &gSaveContext.respawn[RESPAWN_MODE_DOWN];
++        memset(r, 0, sizeof(*r));
++        r->entrance = gSaveContext.save.entrance;
++        r->roomIndex = play->roomCtx.curRoom.num;
++        r->pos = { sHouse.x + wx, sHouse.y, sHouse.z + wz };
++        r->yaw = sHouse.yaw;
++        r->playerParams = PLAYER_PARAMS(0xFF, PLAYER_START_MODE_D);
++        gSaveContext.respawnFlag = -8;
++        gSaveContext.nextTransitionType = TRANS_TYPE_FADE_BLACK_SLOW;
++        gSaveContext.seqId = NA_BGM_DISABLED; // music for the new time of day
++        play->nextEntrance = gSaveContext.save.entrance;
++        play->transitionTrigger = TRANS_TRIGGER_START;
++        play->transitionType = TRANS_TYPE_FADE_BLACK_SLOW;
++        Audio_PlaySfx(NA_SE_SY_DECIDE);
++    }
++}
++
++// called from MMMod_OnPlayInit: the time skip happens while the screen is black
++static void ApplyRest() {
++    if (!sRestPending) return;
++    sRestPending = false;
++    gSaveContext.save.day = sRestDay;
++    gSaveContext.save.time = sRestTime;
++    gSaveContext.save.isNight = (sRestTime > CLOCK_TIME(18, 0)) || (sRestTime < CLOCK_TIME(6, 0));
++    gWeatherMode = WEATHER_MODE_CLEAR;
 +}
 +
 +// ---------------------------------------------------------------- optional stealth (used by guard actors)
@@ -7347,7 +7654,9 @@ index 0000000..e8dd6da
 +    if (want < 0) return;
 +    // Hide the vanilla clock, hearts, magic and rupees (the touch overlay draws its own bar),
 +    // plus the C/Start button icons that the touch buttons now show.
-+    static const char* elems[] = { "Clock", "Hearts", "Magic", "Rupees", "CLeft", "CDown", "CRight", "CUp", "Start" };
++    // everything the touch UI now shows itself (timers and minigame counters stay as they are)
++    static const char* elems[] = { "Clock", "Hearts", "Magic", "Rupees", "CLeft", "CDown", "CRight", "CUp", "Start",
++                                   "A", "B", "DPad", "Carrots", "Keys", "Skulltulas" };
 +    for (const char* e : elems) {
 +        std::string cvar = std::string("gHudEditor.") + e + ".Mode";
 +        CVarSetInteger(cvar.c_str(), want ? 1 /* hidden */ : 0 /* vanilla */);
@@ -7375,6 +7684,14 @@ index 0000000..e8dd6da
 +    sHud[6] = gSaveContext.save.day;
 +    sHud[7] = gSaveContext.save.time;
 +    sHud[8] = (gSaveContext.save.saveInfo.playerData.doubleDefense ? 1 : 0) | (gSaveContext.save.isNight ? 2 : 0);
++    bool inDungeon = Map_CurRoomHasMapI(play) && (gSaveContext.dungeonSceneSharedIndex < 4);
++    s32 keys = inDungeon ? DUNGEON_KEY_COUNT(gSaveContext.dungeonSceneSharedIndex) : -1;
++    sHud[9] = inDungeon ? MAX(0, keys) : -1;
++    Player* p = GET_PLAYER(play);
++    sHud[10] = ((p != nullptr) && (p->stateFlags1 & PLAYER_STATE1_800000)) ? play->interfaceCtx.numHorseBoosts : -1;
++    sHud[11] = ((play->sceneId == SCENE_KINSTA1) || (play->sceneId == SCENE_KINDAN2))
++                   ? Inventory_GetSkullTokenCount(play->sceneId)
++                   : -1;
 +}
 +
 +extern "C" void MMMod_AfterPlayUpdate(PlayState* play) {
@@ -7474,7 +7791,7 @@ index 0000000..e8dd6da
 +    UpdateMarker(play);
 +    UpdateMiniMap(play);
 +    UpdateTreeChopping(play);
-+    UpdateRuins(play);
++    UpdateHouse(play);
 +    SmoothSteering(play);
 +    {
 +        Player* p = GET_PLAYER(play);
@@ -7490,6 +7807,7 @@ index 0000000..e8dd6da
 +        sHeldItemButton = (player != nullptr) ? player->heldItemButton : -1;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_100000)) bits |= ST_AIMING;
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_8000000)) bits |= ST_SWIMMING;
++        if (sNearDoor.load()) bits |= ST_AT_HOUSE;
 +        if (InConversation(play)) bits |= ST_TEXT;
 +    }
 +    if (sSprintOn) bits |= ST_SPRINT;
@@ -7545,7 +7863,8 @@ index 0000000..e8dd6da
 +        hookRegistered = true;
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPassPlayerInputs>(OnPlayerInputs);
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateUpdate>(OnGameStateUpdate);
-+        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawWorldEnd>(DrawRuins);
++        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawWorldEnd>(DrawWorldExtras);
++        LoadHouse();
 +        ReadSnapshotFile();
 +    }
 +    ApplyPresetOnce();
@@ -7746,7 +8065,9 @@ index 0000000..e8dd6da
 +    if (option == 7) sInvertSwim = value;      // 1 = invert up/down while swimming underwater
 +    if (option == 8) sTreeChop = value;        // 1 = trees can be chopped down
 +    if (option == 9) sSmoothSteer = value;     // 1 = smoother swimming / horse steering
-+    if (option == 10) sRuinedEnabled = value;  // 1 = Ruined Termina after the moon falls
++    if (option == 11) sTripleJump = value;     // 1 = Mario-64 style triple jump
++    if (option == 12) sHousePlaceReq = value;  // 1 = build the house here, 2 = remove it
++    if (option == 13) sRestReq = value;        // rest this many hours (at the house door)
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
 +        sOurMap = value;
 +        sMinimapReq = 1;
@@ -7755,10 +8076,10 @@ index 0000000..e8dd6da
 +
 +// { health (1/16 hearts), max health, magic, max magic (0 = none), rupees, wallet size, day, time, flags }
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetHud(JNIEnv* env, jobject) {
-+    jint vals[9];
-+    for (int i = 0; i < 9; i++) vals[i] = sHud[i].load();
-+    jintArray arr = env->NewIntArray(9);
-+    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 9, vals);
++    jint vals[12];
++    for (int i = 0; i < 12; i++) vals[i] = sHud[i].load();
++    jintArray arr = env->NewIntArray(12);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 12, vals);
 +    return arr;
 +}
 +#endif
@@ -7792,31 +8113,6 @@ index f0e57da..baa4dae 100644
          // If opposed directions on the D-Pad are pressed at the same time, mask both out
          if ((input->cur.button & (BTN_DDOWN | BTN_DUP)) == (BTN_DDOWN | BTN_DUP)) {
              input->cur.button &= ~(BTN_DDOWN | BTN_DUP);
-diff --git a/mm/src/code/z_demo.c b/mm/src/code/z_demo.c
-index e3e1aaf..9c72277 100644
---- a/mm/src/code/z_demo.c
-+++ b/mm/src/code/z_demo.c
-@@ -154,6 +154,8 @@ void CutsceneHandler_StartScript(PlayState* play, CutsceneContext* csCtx) {
- 
- /* Start of command handling section */
- 
-+s32 MMMod_OnMoonCrash(PlayState* play);
-+
- void CutsceneCmd_Misc(PlayState* play, CutsceneContext* csCtx, CsCmdMisc* cmd) {
-     static u16 D_801BB15C = 0xFFFF;
-     Player* player = GET_PLAYER(play);
-@@ -376,7 +378,10 @@ void CutsceneCmd_Misc(PlayState* play, CutsceneContext* csCtx, CsCmdMisc* cmd) {
- 
-         case CS_MISC_RESET_SAVE_FROM_MOON_CRASH:
-             if (isFirstFrame) {
--                Sram_ResetSaveFromMoonCrash(&play->sramCtx);
-+                // Majora's Mask touch mod: "Ruined Termina" keeps the world going after the moon falls
-+                if (!MMMod_OnMoonCrash(play)) {
-+                    Sram_ResetSaveFromMoonCrash(&play->sramCtx);
-+                }
-             }
-             break;
- 
 diff --git a/mm/src/code/z_play.c b/mm/src/code/z_play.c
 index fa46547..92a08eb 100644
 --- a/mm/src/code/z_play.c
