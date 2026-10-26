@@ -6019,10 +6019,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..bee87e6
+index 0000000..4ac654b
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2040 @@
+@@ -0,0 +1,2083 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7266,20 +7266,19 @@ index 0000000..bee87e6
 +}
 +
 +// ---------------------------------------------------------------- your house in Termina Field
-+// Built only from the game's own pieces: the Gorman Bros. farmhouse model, with Romani Ranch's wooden horse
-+// fences forming a paddock for Epona beside it. Walk up to it and tap Enter: inside is your home (the Romani
-+// Ranch house interior, emptied). Rest there to pass time to any hour, and your masks hang on the wall.
++// Link's house is a copy of the Mountain Smithy cabin (spring version), drawn from the game's own
++// Mountain Village mesh pieces, standing on the raised grass patch outside Milk Road. Walk into its door
++// and you go inside: the smithy's own interior, emptied out, as your home. Rest there, and your masks hang
++// on the wall. Epona's paddock stands beside it.
++#include "assets/scenes/Z2_10YUKIYAMANOMURA2/Z2_10YUKIYAMANOMURA2/Z2_10YUKIYAMANOMURA2_room_00.h"
++
 +struct HouseData {
 +    u32 magic;
 +    s32 valid;
-+    f32 x, y, z;
-+    s16 yaw;
 +};
-+// Fixed spot: the raised grass patch outside Milk Road (top at y = -198), house to the south,
-+// Epona's paddock between it and the north edge of the patch
-+static HouseData sHouse = { 0x48534533, 1, -2230.0f, -206.0f, 3215.0f, 0 };
++static HouseData sHouse = { 0x48534535, 1 };
 +static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = house on, 2 = house off
-+static std::atomic<int> sNearDoor{ 0 };      // close enough to the house to go in
++static std::atomic<int> sNearDoor{ 0 };      // inside your home (rest available)
 +static std::atomic<int> sEnterReq{ 0 };
 +static std::atomic<int> sRestReq{ -1 };      // hours to rest
 +static bool sRestPending = false;
@@ -7288,18 +7287,44 @@ index 0000000..bee87e6
 +static bool sAtHome = false;        // inside your home right now
 +static bool sGoingHome = false;     // walking through the door
 +static s32 sHouseSceneSeen = -1;
-+static s32 sObjKoya = -1, sObjFence = -1;
-+static Actor* sKoya = nullptr;
++static s32 sObjFence = -1;
 +static bool sFencesSpawned = false;
 +static bool sEponaPenned = false;
++static u32 sDoorCooldownFrame = 0;
 +// mask wall inside the home
 +static Vec3f sMaskWallPos;
 +static s16 sMaskWallYaw = 0;
 +static bool sMaskWallFound = false;
 +
-+#define PEN_OFFSET_X 620.0f   // paddock to the house's right
-+#define PEN_HALF 260.0f       // paddock is about 520 x 520
-+#define HOME_ENTRANCE ENTRANCE(RANCH_HOUSE, 1)
++// Smithy (Mountain Village) coordinates -> Termina Field: the cabin keeps its orientation (door facing
++// west, towards Milk Road) and its porch floor sits level with the top of the grass patch (y = -198).
++#define SMITHY_DX (-2509.0f)
++#define SMITHY_DY (-269.0f)
++#define SMITHY_DZ (2530.0f)
++#define HOME_ENTRANCE ENTRANCE(MOUNTAIN_SMITHY, 0)
++
++// The cabin's pieces of the Mountain Village mesh (walls, roof, porch, chimney)
++static const char* sSmithyDLs[] = {
++    Z2_10YUKIYAMANOMURA2_room_00DL_00A900, Z2_10YUKIYAMANOMURA2_room_00DL_00B3C0,
++    Z2_10YUKIYAMANOMURA2_room_00DL_009C58, Z2_10YUKIYAMANOMURA2_room_00DL_00B650,
++    Z2_10YUKIYAMANOMURA2_room_00DL_00C108, Z2_10YUKIYAMANOMURA2_room_00DL_00C5A8,
++    Z2_10YUKIYAMANOMURA2_room_00DL_00C810,
++};
++
++// Solid walls (Termina Field x/z ranges and roof height), taken from the smithy's own collision
++struct WallBox {
++    f32 x0, x1, z0, z1, top;
++};
++static const WallBox sSmithyWalls[] = {
++    { 236 + SMITHY_DX, 551 + SMITHY_DX, 582 + SMITHY_DZ, 1018 + SMITHY_DZ, 485 + SMITHY_DY }, // main hall
++    { 107 + SMITHY_DX, 236 + SMITHY_DX, 681 + SMITHY_DZ, 770 + SMITHY_DZ, 485 + SMITHY_DY },  // porch room, left
++    { 107 + SMITHY_DX, 236 + SMITHY_DX, 830 + SMITHY_DZ, 919 + SMITHY_DZ, 485 + SMITHY_DY },  // porch room, right
++    { 147 + SMITHY_DX, 236 + SMITHY_DX, 770 + SMITHY_DZ, 830 + SMITHY_DZ, 485 + SMITHY_DY },  // behind the door
++};
++// The doorway: a 60-wide recess in the west wall; the door itself is at x = 147 (smithy coordinates)
++#define DOOR_X (147 + SMITHY_DX)
++#define DOOR_Z (800 + SMITHY_DZ)
++#define DOOR_Y (71 + SMITHY_DY)
 +
 +static std::string HousePath() {
 +    return Ship::Context::GetPathRelativeToAppDirectory("mm_house.bin");
@@ -7308,56 +7333,70 @@ index 0000000..bee87e6
 +static void LoadHouse() {
 +    std::ifstream f(HousePath(), std::ios::binary);
 +    HouseData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534534) sHouse.valid = h.valid; // only on/off is saved
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534535) sHouse.valid = h.valid;
 +}
 +
 +static void SaveHouse() {
-+    HouseData h = sHouse;
-+    h.magic = 0x48534534;
 +    std::ofstream f(HousePath(), std::ios::binary | std::ios::trunc);
-+    if (f) f.write((const char*)&h, sizeof(h));
++    if (f) f.write((const char*)&sHouse, sizeof(sHouse));
 +}
 +
 +static bool HouseHere(PlayState* play) {
 +    return sHouse.valid && (play->sceneId == SCENE_00KEIKOKU);
 +}
 +
-+// house-local (house faces +Z) -> world
-+static Vec3f HouseLocal(f32 lx, f32 lz) {
-+    f32 s = Math_SinS(sHouse.yaw), c = Math_CosS(sHouse.yaw);
-+    Vec3f w = { sHouse.x + lx * c + lz * s, sHouse.y, sHouse.z - lx * s + lz * c };
-+    return w;
++static void PushOutOfWalls(Vec3f* p) {
++    for (auto& w : sSmithyWalls) {
++        if (p->y > w.top) continue;
++        if (p->x <= w.x0 - 12 || p->x >= w.x1 + 12 || p->z <= w.z0 - 12 || p->z >= w.z1 + 12) continue;
++        // push out through the nearest side
++        f32 dl = p->x - (w.x0 - 12), dr = (w.x1 + 12) - p->x, db = p->z - (w.z0 - 12), df = (w.z1 + 12) - p->z;
++        f32 m = MIN(MIN(dl, dr), MIN(db, df));
++        if (m == dl) p->x = w.x0 - 12;
++        else if (m == dr) p->x = w.x1 + 12;
++        else if (m == db) p->z = w.z0 - 12;
++        else p->z = w.z1 + 12;
++    }
 +}
 +
-+static f32 FloorY(PlayState* play, Vec3f p) {
-+    CollisionPoly* poly;
-+    Vec3f probe = { p.x, p.y + 300.0f, p.z };
-+    f32 y = BgCheck_EntityRaycastFloor1(&play->colCtx, &poly, &probe);
-+    return (y > BGCHECK_Y_MIN + 1) ? y : p.y;
-+}
-+
-+static void SpawnHouseActors(PlayState* play) {
-+    if (sObjKoya < 0) sObjKoya = Object_GetSlot(&play->objectCtx, OBJECT_KEPN_KOYA);
-+    if (sObjKoya < 0) sObjKoya = Object_SpawnPersistent(&play->objectCtx, OBJECT_KEPN_KOYA);
++static void SpawnPaddock(PlayState* play) {
 +    if (sObjFence < 0) sObjFence = Object_GetSlot(&play->objectCtx, OBJECT_UMAJUMP);
 +    if (sObjFence < 0) sObjFence = Object_SpawnPersistent(&play->objectCtx, OBJECT_UMAJUMP);
-+
-+    if (sKoya == nullptr && sObjKoya >= 0 && Object_IsLoaded(&play->objectCtx, sObjKoya)) {
-+        sKoya = Actor_Spawn(&play->actorCtx, play, ACTOR_OBJ_KEPN_KOYA, sHouse.x, sHouse.y, sHouse.z, 0, sHouse.yaw, 0, 0);
-+    }
 +    if (!sFencesSpawned && sObjFence >= 0 && Object_IsLoaded(&play->objectCtx, sObjFence)) {
 +        sFencesSpawned = true;
-+        // Romani Ranch fence sections are 320 long. Paddock: x -2600..-1960, z 3560..3880, gap at the front right.
++        // Romani Ranch fence sections are 320 long. Paddock: x -2600..-1960, z 3600..3920, gap front right.
 +        struct { f32 x, z; s16 rot; } fences[] = {
-+            { -2440.0f, 3880.0f, 0 },      { -2120.0f, 3880.0f, 0 },      // back
-+            { -2600.0f, 3720.0f, 0x4000 }, { -1960.0f, 3720.0f, 0x4000 }, // sides
-+            { -2440.0f, 3560.0f, 0 },                                     // front (gap on the right)
++            { -2440.0f, 3920.0f, 0 },      { -2120.0f, 3920.0f, 0 },      // back
++            { -2600.0f, 3760.0f, 0x4000 }, { -1960.0f, 3760.0f, 0x4000 }, // sides
++            { -2440.0f, 3600.0f, 0 },                                     // front (gap on the right)
 +        };
 +        for (auto& f : fences) {
-+            // type 4: a static fence (type 1 is the bobbing horse-jump fence)
-+            Actor_Spawn(&play->actorCtx, play, ACTOR_BG_UMAJUMP, f.x, -198.0f, f.z, 0, f.rot, 0, 4);
++            Actor_Spawn(&play->actorCtx, play, ACTOR_BG_UMAJUMP, f.x, -198.0f, f.z, 0, f.rot, 0, 4); // static fence
 +        }
 +    }
++}
++
++// Draw the cabin (and its door) in Termina Field
++static void DrawSmithyCabin(PlayState* play) {
++    OPEN_DISPS(play->state.gfxCtx);
++    func_800BCBF4(&gZeroVec3f, play);
++    func_8012C268(&play->state);
++    Matrix_Translate(SMITHY_DX, SMITHY_DY, SMITHY_DZ, MTXMODE_NEW);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    for (const char* dl : sSmithyDLs) {
++        gSPDisplayList(POLY_OPA_DISP++, (Gfx*)dl);
++    }
++    // the cabin's wooden door (the game's standard door), closed, facing west
++    Gfx_SetupDL25_Opa(play->state.gfxCtx);
++    gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);
++    Matrix_Translate(DOOR_X, DOOR_Y, DOOR_Z, MTXMODE_NEW);
++    Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
++    Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
++    Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
++    Matrix_Translate(-3000.0f, 0.0f, 0.0f, MTXMODE_APPLY);
++    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++    gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gDoorLeftDL);
++    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
 +// Find the nearest wall around the spawn point inside your home, to hang the masks on
@@ -7400,10 +7439,15 @@ index 0000000..bee87e6
 +    }
 +}
 +
-+// The masks, hung on the wall of your home (the game's own mask pictures)
++// Outside: the cabin. Inside your home: the masks on the wall (the game's own mask pictures).
 +static void DrawWorldExtras() {
 +    PlayState* play = gPlayState;
-+    if (play == nullptr || !sAtHome || !sMaskWallFound || play->sceneId != SCENE_OMOYA) return;
++    if (play == nullptr) return;
++    if (HouseHere(play)) {
++        DrawSmithyCabin(play);
++        return;
++    }
++    if (!sAtHome || !sMaskWallFound || play->sceneId != SCENE_KAJIYA) return;
 +    BuildMaskVtx();
 +    OPEN_DISPS(play->state.gfxCtx);
 +    Gfx_SetupDL25_Opa(play->state.gfxCtx);
@@ -7446,15 +7490,15 @@ index 0000000..bee87e6
 +    Player* player = GET_PLAYER(play);
 +    if (play->sceneId != sHouseSceneSeen) {
 +        sHouseSceneSeen = play->sceneId;
-+        sKoya = nullptr;
 +        sFencesSpawned = false;
 +        sEponaPenned = false;
-+        sObjKoya = sObjFence = -1;
-+        if (play->sceneId == SCENE_OMOYA && sGoingHome) {
++        sObjFence = -1;
++        sDoorCooldownFrame = play->gameplayFrames + 30; // don't walk straight back in on arrival
++        if (play->sceneId == SCENE_KAJIYA && sGoingHome) {
 +            sAtHome = true;
 +            sGoingHome = false;
 +            sMaskWallFound = false;
-+        } else if (play->sceneId != SCENE_OMOYA) {
++        } else if (play->sceneId != SCENE_KAJIYA) {
 +            sAtHome = false;
 +        }
 +    }
@@ -7469,38 +7513,29 @@ index 0000000..bee87e6
 +    sNearDoor = 0;
 +    if (player == nullptr) return;
 +
-+    // ---- inside your home
-+    if (sAtHome && play->sceneId == SCENE_OMOYA) {
-+        // it's yours: nobody else is here
++    // ---- inside your home (the smithy's interior, with nobody in it)
++    if (sAtHome && play->sceneId == SCENE_KAJIYA) {
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_NPC].first; a != nullptr; a = a->next) Actor_Kill(a);
 +        if (!sMaskWallFound && play->gameplayFrames > 5) FindMaskWall(play, player->actor.world.pos);
-+        sNearDoor = !Play_InCsMode(play); // you can rest anywhere in your home
-+        // any way out of the house leads back to your front door in Termina Field
++        sNearDoor = !Play_InCsMode(play); // rest anywhere in your home
++        // going out the door leads back to your own front door in Termina Field
 +        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
 +            sHouse.valid) {
-+            Vec3f door = { -1880.0f, -198.0f, 3640.0f }; // on the patch, by the paddock gap
++            Vec3f out = { DOOR_X - 110.0f, DOOR_Y, DOOR_Z };
 +            sAtHome = false;
-+            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), door, (s16)0x8000, 0);
++            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), out, (s16)-0x4000, 0);
 +        }
 +    }
 +
-+    // ---- outside: the house, its paddock, and Epona waiting there
++    // ---- outside: solid walls; walking into the doorway takes you in; Epona waits in her paddock
 +    if (HouseHere(play)) {
-+        SpawnHouseActors(play);
-+        // close to the house on any side (its walls are solid, the door is too)
-+        Vec3f centre = { sHouse.x + 86.0f, sHouse.y, sHouse.z - 16.0f };
-+        sNearDoor = (Math_Vec3f_DistXZ(&player->actor.world.pos, &centre) < 520.0f) &&
-+                    (fabsf(player->actor.world.pos.y - sHouse.y) < 120.0f) && (player->rideActor == nullptr) &&
-+                    !Play_InCsMode(play);
-+        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_BG].first; a != nullptr; a = a->next) {
-+            if (a->id != ACTOR_EN_HORSE || a == player->rideActor || sEponaPenned || play->gameplayFrames < 10) continue;
-+            Vec3f pen = { -2280.0f, -198.0f, 3720.0f };
-+            a->world.pos = pen;
-+            a->home.pos = pen;
-+            a->prevPos = pen;
-+            sEponaPenned = true;
-+        }
-+        if (sEnterReq.exchange(0) && sNearDoor) {
++        SpawnPaddock(play);
++        PushOutOfWalls(&player->actor.world.pos);
++        if (player->rideActor != nullptr) PushOutOfWalls(&player->rideActor->world.pos);
++        bool inDoorway = (player->actor.world.pos.x > DOOR_X - 45.0f) && (fabsf(player->actor.world.pos.z - DOOR_Z) < 30.0f) &&
++                         (fabsf(player->actor.world.pos.y - DOOR_Y) < 60.0f);
++        if (inDoorway && player->rideActor == nullptr && !Play_InCsMode(play) &&
++            play->transitionTrigger == TRANS_TRIGGER_OFF && play->gameplayFrames > sDoorCooldownFrame) {
 +            sGoingHome = true;
 +            play->nextEntrance = HOME_ENTRANCE;
 +            gSaveContext.nextCutsceneIndex = 0;
@@ -7509,6 +7544,14 @@ index 0000000..bee87e6
 +            gSaveContext.nextTransitionType = TRANS_TYPE_FADE_BLACK;
 +            Audio_PlaySfx(NA_SE_OC_DOOR_OPEN);
 +            return;
++        }
++        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_BG].first; a != nullptr; a = a->next) {
++            if (a->id != ACTOR_EN_HORSE || a == player->rideActor || sEponaPenned || play->gameplayFrames < 10) continue;
++            Vec3f pen = { -2280.0f, -198.0f, 3760.0f };
++            a->world.pos = pen;
++            a->home.pos = pen;
++            a->prevPos = pen;
++            sEponaPenned = true;
 +        }
 +    }
 +    sEnterReq = 0;
