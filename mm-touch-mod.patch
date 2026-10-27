@@ -989,10 +989,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..c082540
+index 0000000..42febe2
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,3067 @@
+@@ -0,0 +1,3115 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1301,11 +1301,7 @@ index 0000000..c082540
 +        restCtl = new Ctl("rest", "Rest", "", KIND_REST, 0, STYLE_PLAIN, 0.500f, 0.720f, 64);
 +        ctls.add(restCtl);
 +        // at home: hang things on the wall / put clutter away
-+        ctls.add(new Ctl("display", "Display", "", KIND_HOME, 1, STYLE_PLAIN, 0.420f, 0.720f, 58));
-+        ctls.add(new Ctl("putaway", "Take down", "", KIND_HOME, 2, STYLE_PLAIN, 0.580f, 0.720f, 58));
-+        ctls.add(new Ctl("arrange", "Arrange", "", KIND_HOME, 3, STYLE_PLAIN, 0.340f, 0.720f, 58));
-+        ctls.add(new Ctl("paint", "Paint", "", KIND_HOME, 4, STYLE_PLAIN, 0.660f, 0.720f, 58));
-+        ctls.add(new Ctl("sit", "Sit", "", KIND_HOME, 5, STYLE_PLAIN, 0.500f, 0.560f, 62));
++        ctls.add(new Ctl("house", "House", "", KIND_HOME, 1, STYLE_PLAIN, 0.300f, 0.300f, 58));
 +        stationCtl = new Ctl("station", "Use", "", KIND_STATION, 0, STYLE_PLAIN, 0.500f, 0.560f, 62);
 +        ctls.add(stationCtl);
 +        dpadCtl = new Ctl("dpad", "", "", KIND_DPAD, 0, STYLE_PLAIN, 0.320f, 0.300f, 110);
@@ -1649,9 +1645,7 @@ index 0000000..c082540
 +            case "display": return Ornate.ICON_FRAME;
 +            case "putaway": return Ornate.ICON_BOX;
 +            case "station": return Ornate.ICON_POTION;
-+            case "arrange": return Ornate.ICON_MOVE;
-+            case "paint": return Ornate.ICON_BUCKET;
-+            case "sit": return Ornate.ICON_CHAIR;
++            case "house": return Ornate.ICON_HOUSE;
 +            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
@@ -1989,8 +1983,8 @@ index 0000000..c082540
 +    private boolean lastAtHouse = false, lastAtHome = false, lastNearThing = false, lastNearChair = false;
 +
 +    // ---------------------------------------------------------------- Arrange mode (touch the furniture)
-+    private static final String[] PAINT_NAMES = { "Plaster", "Clock Town", "Snowhead", "Woodfall", "Great Bay",
-+            "Romani", "Ikana", "Honey" };
++    private static final String[] PAINT_NAMES = { "White plaster", "Cream", "Sky blue", "Mint green", "Teal",
++            "Rose pink", "Lavender", "Honey yellow" };
 +    private static final int[] PAINT_COLOURS = { Color.rgb(235, 225, 205), Color.rgb(250, 230, 190),
 +            Color.rgb(185, 210, 245), Color.rgb(190, 225, 180), Color.rgb(165, 215, 210), Color.rgb(245, 195, 180),
 +            Color.rgb(210, 190, 235), Color.rgb(245, 220, 150) };
@@ -2064,9 +2058,9 @@ index 0000000..c082540
 +            }
 +        };
 +
-+        float sx(int i) { return (objs[1 + i * 3] / 1000f * 0.5f + 0.5f) * getWidth(); }
-+        float sy(int i) { return (0.5f - objs[1 + i * 3 + 1] / 1000f * 0.5f) * getHeight(); }
-+        boolean vis(int i) { return objs[1 + i * 3 + 2] != 0; }
++        float sx(int i) { return (objs[2 + i * 4] / 1000f * 0.5f + 0.5f) * getWidth(); }
++        float sy(int i) { return (0.5f - objs[2 + i * 4 + 1] / 1000f * 0.5f) * getHeight(); }
++        boolean vis(int i) { return objs[2 + i * 4 + 2] != 0; }
 +
 +        @Override protected void onDraw(Canvas c) {
 +            int n = objs.length > 0 ? objs[0] : 0;
@@ -2120,6 +2114,70 @@ index 0000000..c082540
 +        }
 +    }
 +
++    // ---------------------------------------------------------------- the House menu (side popup)
++    private void showHouseMenu() {
++        boolean home = (stateBits & ST_AT_HOME) != 0;
++        java.util.List<String> labels = new java.util.ArrayList<>();
++        java.util.List<Runnable> acts = new java.util.ArrayList<>();
++        if (home) {
++            labels.add("Arrange furniture");
++            acts.add(this::startArrange);
++            labels.add("Paint the walls");
++            acts.add(() -> showChoices("Paint this room", PAINT_NAMES, PAINT_COLOURS, i -> act.nativeMmSetOption(19, i)));
++            labels.add("Hang something on the wall");
++            acts.add(() -> openWheel(true));
++            if ((stateBits & ST_NEAR_THING) != 0) {
++                labels.add("Take this down");
++                acts.add(() -> act.nativeMmSetOption(15, 1));
++            }
++        }
++        labels.add("Undo last change");
++        acts.add(() -> act.nativeMmSetOption(18, 1));
++        labels.add("Furniture back how it started");
++        acts.add(() -> act.nativeMmSetOption(18, 2));
++        labels.add("Take everything off the walls");
++        acts.add(() -> act.nativeMmSetOption(18, 3));
++        labels.add("Walls back to plaster");
++        acts.add(() -> act.nativeMmSetOption(18, 4));
++        showChoices(home ? "Your house" : "House (go home to decorate)", labels.toArray(new String[0]), null,
++                i -> acts.get(i).run());
++    }
++
++    // ---------------------------------------------------------------- tap a chair to sit, tap anywhere to stand
++    private float homeTapX, homeTapY;
++    private long homeTapT;
++
++    private void homeTouch(MotionEvent e) {
++        if ((stateBits & ST_AT_HOME) == 0 || arranging) return;
++        if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
++            homeTapX = e.getX();
++            homeTapY = e.getY();
++            homeTapT = e.getEventTime();
++        } else if (e.getActionMasked() == MotionEvent.ACTION_UP) {
++            boolean tap = e.getEventTime() - homeTapT < 300 && Math.hypot(e.getX() - homeTapX, e.getY() - homeTapY) < dp(14);
++            if (!tap) return;
++            int[] o = act.nativeMmGetHomeObjects();
++            if (o == null || o.length < 2) return;
++            if (o[1] != 0) { // seated: any tap stands up
++                act.nativeMmSetOption(20, 0);
++                return;
++            }
++            int n = o[0], best = -1;
++            float bestD = dp(70), w = root.getWidth(), h = root.getHeight();
++            for (int i = 0; i < n; i++) {
++                int b = 2 + i * 4;
++                if (o[b + 2] == 0 || o[b + 3] == 0) continue; // not visible / not a chair
++                float x = (o[b] / 1000f * 0.5f + 0.5f) * w, y = (0.5f - o[b + 1] / 1000f * 0.5f) * h;
++                float d = (float) Math.hypot(e.getX() - x, e.getY() - y);
++                if (d < bestD) {
++                    bestD = d;
++                    best = i;
++                }
++            }
++            if (best >= 0) act.nativeMmSetOption(20, best + 1);
++        }
++    }
++
 +    // ---------------------------------------------------------------- a small "pick one" panel
 +    interface Pick {
 +        void picked(int index);
@@ -2130,17 +2188,21 @@ index 0000000..c082540
 +        choicePanel = new LinearLayout(act);
 +        choicePanel.setOrientation(LinearLayout.VERTICAL);
 +        choicePanel.setGravity(Gravity.CENTER_HORIZONTAL);
-+        choicePanel.setPadding(dp(16), dp(10), dp(16), dp(12));
++        choicePanel.setPadding(dp(14), dp(10), dp(14), dp(12));
 +        choicePanel.setBackground(panelDrawable());
 +        choicePanel.addView(infoLine(title, 17, GOLD, true));
-+        LinearLayout row = new LinearLayout(act);
-+        row.setGravity(Gravity.CENTER);
++        LinearLayout list = new LinearLayout(act);
++        list.setOrientation(LinearLayout.VERTICAL);
 +        for (int i = 0; i < labels.length; i++) {
 +            final int idx = i;
 +            TextView b = editButton(labels[i], v -> {
-+                pick.picked(idx);
 +                choicePanel.setVisibility(View.GONE);
++                pick.picked(idx);
 +            });
++            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(250), ViewGroup.LayoutParams.WRAP_CONTENT);
++            lp.setMargins(0, dp(3), 0, dp(3));
++            b.setLayoutParams(lp);
++            b.setSingleLine(true);
 +            if (swatches != null) {
 +                GradientDrawable d = new GradientDrawable();
 +                d.setColor(swatches[i]);
@@ -2148,21 +2210,18 @@ index 0000000..c082540
 +                d.setStroke(dp(1), Color.argb(150, 255, 255, 255));
 +                b.setBackground(d);
 +                b.setTextColor(Color.WHITE);
-+                b.setShadowLayer(3f, 0f, 1f, Color.BLACK);
++                b.setShadowLayer(4f, 0f, 1f, Color.BLACK);
 +            }
-+            row.addView(b);
-+            // long labels one per row; colour swatches three per row (so they all fit on screen)
-+            boolean rowFull = swatches == null ? labels.length > 2 : (row.getChildCount() >= 3);
-+            if (rowFull) {
-+                choicePanel.addView(row);
-+                row = new LinearLayout(act);
-+                row.setGravity(Gravity.CENTER);
-+            }
++            list.addView(b);
 +        }
-+        if (row.getChildCount() > 0) choicePanel.addView(row);
-+        choicePanel.addView(editButton("Cancel", v -> choicePanel.setVisibility(View.GONE)));
++        MaxHeightScrollView scroll = new MaxHeightScrollView(act, (int) (root.getHeight() * 0.62f));
++        scroll.addView(list);
++        choicePanel.addView(scroll);
++        TextView cancel = editButton("Cancel", v -> choicePanel.setVisibility(View.GONE));
++        choicePanel.addView(cancel);
 +        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-+        lp.gravity = Gravity.CENTER;
++        lp.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
++        lp.leftMargin = dp(70);
 +        root.addView(choicePanel, lp);
 +        choicePanel.bringToFront();
 +    }
@@ -2939,12 +2998,6 @@ index 0000000..c082540
 +            act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +            refreshSettings();
 +        });
-+        TextView houseRow = settingsRow(settingsPanel, "House", null, null, "Open", () -> {
-+            showSettings(false);
-+            showChoices("House", new String[] { "Undo last change", "Put the furniture back how it started",
-+                    "Take everything off the walls", "Walls back to plaster" }, null, i -> act.nativeMmSetOption(18, i + 1));
-+        });
-+        houseRow.setText("");
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
 +            treeChop = !treeChop;
 +            prefs.edit().putBoolean("treeChop", treeChop).apply();
@@ -3084,6 +3137,7 @@ index 0000000..c082540
 +
 +        row2.addView(trayTile("\uD83E\uDDED", "Minimap", v -> tapN64(N64_L), true));
 +        row2.addView(trayTile("\u2699", "Touch", v -> showSettings(true), true));
++        row2.addView(trayTile("\uD83C\uDFE0", "House", v -> showHouseMenu(), true));
 +        row2.addView(trayTile("\u270E", "Edit", v -> setEditing(true), true));
 +        hideTile = trayTile("\uD83D\uDC41", "Hide", v -> {
 +            controlsHidden = !controlsHidden;
@@ -3377,9 +3431,7 @@ index 0000000..c082540
 +                continue;
 +            }
 +            if (c.kind == KIND_HOME) {
-+                boolean need = c.value == 2 ? (stateBits & ST_NEAR_THING) != 0
-+                        : c.value == 5 ? (stateBits & ST_NEAR_CHAIR) != 0 : true;
-+                boolean show = editing || (!c.hidden && !arranging && (stateBits & ST_AT_HOME) != 0 && need);
++                boolean show = editing || (!c.hidden && !arranging && (stateBits & ST_AT_HOME) != 0);
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
 +                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
 +                continue;
@@ -3588,12 +3640,7 @@ index 0000000..c082540
 +                                i -> act.nativeMmSetOption(17, i));
 +                        break;
 +                    case KIND_HOME:
-+                        if (c.value == 1) openWheel(true);
-+                        else if (c.value == 2) act.nativeMmSetOption(15, 1);
-+                        else if (c.value == 3) startArrange();
-+                        else if (c.value == 4) showChoices("Paint this room's walls", PAINT_NAMES, PAINT_COLOURS,
-+                                i -> act.nativeMmSetOption(19, i));
-+                        else if (c.value == 5) act.nativeMmSetOption(20, 1);
++                        showHouseMenu();
 +                        break;
 +                    case KIND_REST:
 +                        if ((stateBits & ST_AT_HOME) != 0) showRest(true);   // inside: rest
@@ -3747,8 +3794,7 @@ index 0000000..c082540
 +            case KIND_MAPVIEW: return "mini-map";
 +            case KIND_DPAD: return "D-pad shortcuts";
 +            case KIND_REST: return "Rest (by your bed)";
-+            case KIND_HOME: return c.value == 1 ? "Display (at home)" : c.value == 2 ? "Take down (at home)"
-+                    : c.value == 3 ? "Arrange (at home)" : c.value == 4 ? "Paint (at home)" : "Sit (by a chair)";
++            case KIND_HOME: return "House menu (at home)";
 +            case KIND_STATION: return "Stove / wardrobe (at home)";
 +            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
@@ -3827,6 +3873,7 @@ index 0000000..c082540
 +    }
 +
 +    private boolean onStickTouch(View v, MotionEvent e) {
++        homeTouch(e);
 +        touched();
 +        if (editing || controlsHidden) return false;
 +        int idx = e.getActionIndex();
@@ -3970,6 +4017,7 @@ index 0000000..c082540
 +
 +    private boolean onCamTouch(View v, MotionEvent e) {
 +        touched();
++        homeTouch(e);
 +        if (editing || controlsHidden) return false;
 +        int idx = e.getActionIndex();
 +        switch (e.getActionMasked()) {
@@ -4062,10 +4110,10 @@ index 0000000..c082540
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..1f3e1c1
+index 0000000..ae2f24f
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,816 @@
+@@ -0,0 +1,835 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -4409,7 +4457,8 @@ index 0000000..1f3e1c1
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
 +            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16,
 +            ICON_HORSE = 17, ICON_MOON = 18, ICON_DOOR = 19, ICON_FRAME = 20, ICON_BOX = 21,
-+            ICON_POTION = 22, ICON_SHIRT = 23, ICON_MOVE = 24, ICON_BUCKET = 25, ICON_CHAIR = 26;
++            ICON_POTION = 22, ICON_SHIRT = 23, ICON_MOVE = 24, ICON_BUCKET = 25, ICON_CHAIR = 26,
++            ICON_HOUSE = 27;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -4477,6 +4526,7 @@ index 0000000..1f3e1c1
 +                case ICON_MOVE: move(c, s); break;
 +                case ICON_BUCKET: bucket(c, s); break;
 +                case ICON_CHAIR: chair(c, s); break;
++                case ICON_HOUSE: house(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -4661,6 +4711,23 @@ index 0000000..1f3e1c1
 +            c.drawArc(s * 0.24f, s * 0.14f, s * 0.64f, s * 0.5f, 200, 140, false, stroke);
 +            accent.setStyle(Paint.Style.FILL);
 +            c.drawCircle(s * 0.78f, s * 0.62f, s * 0.06f, accent);
++            accent.setStyle(Paint.Style.STROKE);
++        }
++
++        // House menu: a little house
++        private void house(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.5f, s * 0.16f);
++            p.lineTo(s * 0.84f, s * 0.46f);
++            p.lineTo(s * 0.74f, s * 0.46f);
++            p.lineTo(s * 0.74f, s * 0.82f);
++            p.lineTo(s * 0.26f, s * 0.82f);
++            p.lineTo(s * 0.26f, s * 0.46f);
++            p.lineTo(s * 0.16f, s * 0.46f);
++            p.close();
++            c.drawPath(p, fill);
++            accent.setStyle(Paint.Style.FILL);
++            c.drawRect(s * 0.44f, s * 0.58f, s * 0.56f, s * 0.82f, accent);
 +            accent.setStyle(Paint.Style.STROKE);
 +        }
 +
@@ -6398,10 +6465,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..999d14d
+index 0000000..c8a9c43
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,3171 @@
+@@ -0,0 +1,3314 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7740,7 +7807,8 @@ index 0000000..999d14d
 +    s32 excludeN = 0;
 +    f32 excludeR = 0.0f;
 +    bool bothSides = false; // draw both faces (for the door)
-+    std::function<bool(f32, f32, f32)> keep; // optional: keep a triangle only if this says so (by its centre)
++    std::function<bool(const Vtx*, const Vtx*, const Vtx*, int)> keep; // optional: keep this triangle? (corners, texture count)
++    mutable int texOrd = 0; // texture changes seen so far in the current list
 +    bool Excluded(const Vtx* a, const Vtx* b, const Vtx* c) const {
 +        f32 x = (a->v.ob[0] + b->v.ob[0] + c->v.ob[0]) / 3.0f, y = (a->v.ob[1] + b->v.ob[1] + c->v.ob[1]) / 3.0f;
 +        f32 z = (a->v.ob[2] + b->v.ob[2] + c->v.ob[2]) / 3.0f;
@@ -7748,7 +7816,7 @@ index 0000000..999d14d
 +            f32 dx = x - exclude[i].x, dy = y - exclude[i].y, dz = z - exclude[i].z;
 +            if (dx * dx + dy * dy + dz * dz < excludeR * excludeR) return true;
 +        }
-+        if (keep && !keep(x, y, z)) return true;
++        if (keep && !keep(a, b, c, texOrd)) return true;
 +        return false;
 +    }
 +    bool Inside(const Vtx& v) const {
@@ -7868,9 +7936,11 @@ index 0000000..999d14d
 +                if (i + 1 >= ins.size()) return false;
 +                out.gfx.push_back(g);
 +                out.gfx.push_back(ins[++i]);
++                f.texOrd++;
 +                break;
 +            case 0x25: // texture by name (1 word, the name lives in this display list)
 +                out.gfx.push_back(g);
++                f.texOrd++;
 +                break;
 +            case 0x31: { // call another display list, by hash
 +                if (i + 1 >= ins.size()) return false;
@@ -7908,7 +7978,10 @@ index 0000000..999d14d
 +            case 0xD8:
 +            case 0xDC:
 +            case 0xDE:
-+            case 0xFD: // raw (segment) texture address
++                break;
++            case 0xFD: // raw (segment) texture address: not copied, but counted
++                f.texOrd++;
++                break;
 +            case 0x28:
 +            case 0x29:
 +            case 0x36:
@@ -7948,6 +8021,7 @@ index 0000000..999d14d
 +        memset(&pipe, 0, sizeof(pipe));
 +        gDPPipeSync(&pipe);
 +        out.gfx.push_back(pipe);
++        f.texOrd = 0;
 +        if (!CopyDL(std::static_pointer_cast<Fast::DisplayList>(res).get(), f, out, slots, slotIn, 0)) return false;
 +    }
 +    Gfx end;
@@ -8118,39 +8192,59 @@ index 0000000..999d14d
 +    const char* name;
 +    int room;
 +    s16 bb[6]; // x0 x1 y0 y1 z0 z1 (house coordinates)
-+    int parts[4];
++    int parts[8]; // the room pieces it has triangles in
 +    int partCount;
-+    int startDeleted; // the second bed starts out gone: one bed only
++    int texDl, texOrd; // rugs: the triangles of one texture in a floor piece (instead of a box)
++    int startDeleted;  // the second bed starts out gone: one bed only
 +    int isChair;
 +};
++// chairs come first: they sit inside the table's box
 +static const HomeObj sObjs[] = {
-+    { "kitchen counter", 1, { 600, 790, 20, 146, 62, 200 }, { 0x006870, 0x008B88, 0x009F00, 0x00C588 }, 4, 0, 0 },
-+    { "barrel", 1, { 1155, 1204, 0, 40, -187, -130 }, { 0x003DD8 }, 1, 0, 0 },
-+    { "cupboard", 1, { 1173, 1201, 0, 86, -47, 18 }, { 0x003DD8, 0x00AB88, 0x00F448 | XLU }, 3, 0, 0 },
-+    { "stool", 1, { 1182, 1197, 0, 66, 27, 36 }, { 0x003DD8 }, 1, 0, 0 },
-+    { "shelf", 1, { 1167, 1200, 0, 120, -94, -77 }, { 0x003DD8, 0x00AB88 }, 2, 0, 0 },
-+    { "milk can", 1, { 1099, 1138, 0, 53, -180, -146 }, { 0x004C60 }, 1, 0, 0 },
-+    { "milk can", 1, { 1055, 1087, 0, 42, -178, -150 }, { 0x004C60 }, 1, 0, 0 },
-+    { "chair", 1, { 736, 766, 20, 54, -92, -60 }, { 0x000620, 0x000F40, 0x00AB88 }, 3, 0, 1 },
-+    { "chair", 1, { 841, 873, 20, 64, 15, 45 }, { 0x000620, 0x000F40, 0x00AB88 }, 3, 0, 1 },
-+    { "table", 1, { 763, 847, 20, 53, -92, 14 }, { 0x000620, 0x000F40, 0x00AB88 }, 3, 0, 0 },
-+    { "bench", 1, { 820, 910, 20, 75, 140, 195 }, { 0x00AB88, 0x00F5E8 | XLU }, 2, 0, 0 },
-+    { "dresser", 1, { 600, 641, 20, 123, -100, 64 }, { 0x008B88, 0x00AB88 }, 2, 0, 0 },
-+    { "little rack", 1, { 942, 970, 20, 34, 137, 203 }, { 0x00C588 }, 1, 0, 0 },
-+    { "crates", 1, { 1109, 1200, 129, 173, -180, -46 }, { 0x0056E0 }, 1, 0, 0 },
-+    { "bench seat", 1, { 1114, 1200, 0, 34, 82, 224 }, { 0x0099D8, 0x00CB10 }, 2, 0, 0 },
-+    { "bed", 2, { 781, 949, 260, 335, -160, -58 }, { 0x001B90, 0x0044A8, 0x006978, 0x008E08 | XLU }, 4, 0, 0 },
-+    { "second bed", 2, { 780, 901, 260, 318, 33, 105 }, { 0x0027D8, 0x004BF8, 0x006978, 0x009038 | XLU }, 4, 1, 0 },
-+    { "vanity", 2, { 1148, 1179, 260, 381, -138, -34 }, { 0x0033B8, 0x0044A8, 0x009328 | XLU }, 3, 0, 0 },
-+    { "chest of drawers", 2, { 964, 1032, 260, 374, -160, -129 }, { 0x0033B8, 0x0044A8, 0x006978, 0x009328 | XLU }, 4, 0, 0 },
-+    { "wardrobe", 2, { 1060, 1160, 260, 380, -180, -160 }, { 0x0007B8 }, 1, 0, 0 },
-+    { "milk can", 2, { 1146, 1180, 260, 313, 28, 67 }, { 0x005A00 }, 1, 0, 0 },
-+    { "milk can", 2, { 1150, 1178, 260, 302, -16, 16 }, { 0x005A00 }, 1, 0, 0 },
-+    { "bedside cupboard", 2, { 780, 811, 260, 351, -42, 26 }, { 0x003E20, 0x004BF8, 0x006978, 0x009630 | XLU }, 4, 0, 0 },
-+    { "stool", 2, { 1037, 1062, 260, 286, -157, -133 }, { 0x006978 }, 1, 0, 0 },
-+    { "side table", 2, { 1155, 1180, 260, 347, 80, 168 }, { 0x003E20, 0x004BF8, 0x009630 | XLU }, 3, 0, 0 },
++    { "chair", 1, { 736, 766, 20, 54, -92, -60 }, { 0x000620, 0x000F40, 0x00AB88 }, 3, 0, 0, 0, 1 },
++    { "chair", 1, { 841, 873, 20, 64, 15, 45 }, { 0x000620, 0x000F40, 0x00AB88 }, 3, 0, 0, 0, 1 },
++    { "kitchen counter", 1, { 600, 810, 20, 240, 62, 200 }, { 0x002DD0, 0x006870, 0x008B88, 0x009F00, 0x00C588, 0x00F178 | XLU }, 6, 0, 0, 0, 0 },
++    { "barrel", 1, { 1155, 1204, 0, 40, -187, -130 }, { 0x003DD8 }, 1, 0, 0, 0, 0 },
++    { "cupboard", 1, { 1173, 1201, 0, 86, -47, 18 }, { 0x003DD8, 0x00AB88, 0x00F448 | XLU }, 3, 0, 0, 0, 0 },
++    { "stool", 1, { 1182, 1197, 0, 66, 27, 36 }, { 0x003DD8 }, 1, 0, 0, 0, 0 },
++    { "shelf", 1, { 1167, 1200, 0, 120, -94, -77 }, { 0x003DD8, 0x00AB88 }, 2, 0, 0, 0, 0 },
++    { "shelf post", 1, { 1180, 1196, 1, 101, -76, -57 }, { 0x003DD8, 0x00AB88 }, 2, 0, 0, 0, 0 },
++    { "milk can", 1, { 1099, 1138, 0, 53, -180, -146 }, { 0x004C60 }, 1, 0, 0, 0, 0 },
++    { "milk can", 1, { 1055, 1087, 0, 42, -178, -150 }, { 0x004C60 }, 1, 0, 0, 0, 0 },
++    { "table", 1, { 763, 873, 20, 67, -92, 18 }, { 0x000620, 0x000F40, 0x00AB88, 0x00CD98 }, 4, 0, 0, 0, 0 },
++    { "wall shelf", 1, { 1081, 1081, 133, 165, -179, -153 }, { 0x00F178 | XLU }, 1, 0, 0, 0, 0 },
++    { "wall shelf", 1, { 1068, 1094, 133, 165, -166, -166 }, { 0x00F178 | XLU }, 1, 0, 0, 0, 0 },
++    { "wall shelf", 1, { 712, 738, 133, 165, -302, -302 }, { 0x00F178 | XLU }, 1, 0, 0, 0, 0 },
++    { "bench", 1, { 820, 910, 20, 75, 140, 195 }, { 0x00AB88, 0x00F5E8 | XLU }, 2, 0, 0, 0, 0 },
++    { "dresser", 1, { 600, 641, 20, 123, -100, 64 }, { 0x008B88, 0x00AB88, 0x00C588 }, 3, 0, 0, 0, 0 },
++    { "little rack", 1, { 942, 970, 20, 34, 137, 203 }, { 0x00C588 }, 1, 0, 0, 0, 0 },
++    { "crates", 1, { 1109, 1200, 129, 173, -180, -46 }, { 0x0056E0 }, 1, 0, 0, 0, 0 },
++    { "hay", 1, { 1114, 1200, 0, 34, 82, 224 }, { 0x0099D8, 0x00CB10 }, 2, 0, 0, 0, 0 },
++    { "bed", 2, { 780, 949, 260, 331, -160, -63 }, { 0x001B90, 0x0044A8, 0x006978, 0x008E08 | XLU }, 4, 0, 0, 0, 0 },
++    { "second bed", 2, { 780, 901, 260, 318, 33, 105 }, { 0x0027D8, 0x004BF8, 0x006978, 0x009038 | XLU }, 4, 0, 0, 1, 0 },
++    { "vanity", 2, { 1148, 1180, 260, 401, -138, -34 }, { 0x0007B8, 0x0033B8, 0x0044A8, 0x009328 | XLU }, 4, 0, 0, 0, 0 },
++    { "chest of drawers", 2, { 964, 1032, 260, 374, -160, -129 }, { 0x0033B8, 0x0044A8, 0x004F10, 0x006978, 0x009328 | XLU }, 5, 0, 0, 0, 0 },
++    { "wardrobe", 2, { 1060, 1160, 260, 380, -180, -160 }, { 0x0007B8, 0x000C18 }, 2, 0, 0, 0, 0 },
++    { "milk can", 2, { 1146, 1180, 260, 313, 28, 67 }, { 0x005A00 }, 1, 0, 0, 0, 0 },
++    { "milk can", 2, { 1150, 1178, 260, 302, -16, 16 }, { 0x005A00 }, 1, 0, 0, 0, 0 },
++    { "bedside cupboard", 2, { 780, 811, 260, 351, -42, 26 }, { 0x003E20, 0x004BF8, 0x004F10, 0x006978, 0x009630 | XLU }, 5, 0, 0, 0, 0 },
++    { "stool", 2, { 1037, 1062, 260, 286, -157, -133 }, { 0x0044A8, 0x006978 }, 2, 0, 0, 0, 0 },
++    { "side table", 2, { 1155, 1180, 260, 347, 80, 168 }, { 0x003E20, 0x004BF8, 0x009630 | XLU }, 3, 0, 0, 0, 0 },
++    { "straw mat", 2, { 861, 1141, 260, 261, -120, 160 }, { 0x000C18 }, 1, 0x000C18, 2, 0, 0 },
++    { "rug", 1, { 702, 941, 20, 21, -133, 58 }, { 0x0023E8 }, 1, 0x0023E8, 4, 0, 0 },
 +};
 +#define OBJ_COUNT (s32)(sizeof(sObjs) / sizeof(sObjs[0]))
++struct RoomDL {
++    int room;
++    int code; // offset | XLU
++};
++// every piece of the two rooms: all of it is drawn from copies while you're home
++static const RoomDL sRoomDLs[] = {
++    // room 1
++    { 1, 0x009F00 }, { 1, 0x003DD8 }, { 1, 0x00F448 | XLU }, { 1, 0x004C60 }, { 1, 0x000F40 }, { 1, 0x00CD98 }, { 1, 0x0023E8 }, { 1, 0x002B30 }, { 1, 0x000620 }, { 1, 0x005D08 }, { 1, 0x006870 }, { 1, 0x002DD0 }, { 1, 0x00F178 | XLU }, { 1, 0x00AB88 }, { 1, 0x00C588 }, { 1, 0x00F5E8 | XLU }, { 1, 0x0056E0 }, { 1, 0x008B88 }, { 1, 0x001940 }, { 1, 0x0099D8 }, { 1, 0x00CB10 }, { 1, 0x001EE8 },
++    // room 2
++    { 2, 0x001B90 }, { 2, 0x008E08 | XLU }, { 2, 0x0027D8 }, { 2, 0x009038 | XLU }, { 2, 0x000310 }, { 2, 0x0044A8 }, { 2, 0x0007B8 }, { 2, 0x0071A0 }, { 2, 0x0050B8 }, { 2, 0x005A00 }, { 2, 0x004F10 }, { 2, 0x006978 }, { 2, 0x004BF8 }, { 2, 0x0033B8 }, { 2, 0x009328 | XLU }, { 2, 0x003E20 }, { 2, 0x009630 | XLU }, { 2, 0x001330 }, { 2, 0x000C18 },
++};
++#define ROOMDL_COUNT (s32)(sizeof(sRoomDLs) / sizeof(sRoomDLs[0]))
 +static const int sWallDL[3] = { 0, 0x001940, 0x001330 }; // walls, per room (1 downstairs, 2 upstairs)
 +
 +struct ObjState {
@@ -8163,7 +8257,7 @@ index 0000000..999d14d
 +};
 +struct HomeData {
 +    u32 magic;
-+    ObjState obj[32];
++    ObjState obj[40];
 +    u8 count;
 +    Hung hung[48];
 +    u8 wallColour[3];
@@ -8188,18 +8282,18 @@ index 0000000..999d14d
 +
 +static void ResetHomeLayout() {
 +    memset(sHome.obj, 0, sizeof(sHome.obj));
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) sHome.obj[i].deleted = sObjs[i].startDeleted;
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) sHome.obj[i].deleted = sObjs[i].startDeleted;
 +}
 +
 +static void LoadHome() {
 +    if (sHomeLoaded) return;
 +    sHomeLoaded = true;
 +    memset(&sHome, 0, sizeof(sHome));
-+    sHome.magic = 0x484F4D33;
++    sHome.magic = 0x484F4D34;
 +    ResetHomeLayout();
 +    std::ifstream f(HomePath(), std::ios::binary);
 +    HomeData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x484F4D33 && h.count <= 48) sHome = h;
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x484F4D34 && h.count <= 48) sHome = h;
 +}
 +
 +static void SaveHome() {
@@ -8210,7 +8304,7 @@ index 0000000..999d14d
 +// ---- the copies
 +struct HomeMeshes {
 +    bool built = false;
-+    CopiedMesh objOpa[32], objXlu[32];
++    CopiedMesh objOpa[40], objXlu[40];
 +    CopiedMesh restOpa[3], restXlu[3]; // everything else in the managed pieces, per room (walls tinted)
 +    std::vector<std::string> managed;  // the original pieces hidden while you're home
 +};
@@ -8230,17 +8324,25 @@ index 0000000..999d14d
 +};
 +#define PAINT_COUNT 8
 +
-+static int OwnerOf(int room, int dl, f32 x, f32 y, f32 z) {
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++static bool InBox(const s16* bb, const Vtx* v) {
++    const f32 e = 6.0f;
++    return v->v.ob[0] >= bb[0] - e && v->v.ob[0] <= bb[1] + e && v->v.ob[1] >= bb[2] - e && v->v.ob[1] <= bb[3] + e &&
++           v->v.ob[2] >= bb[4] - e && v->v.ob[2] <= bb[5] + e;
++}
++
++// which object a triangle of a room piece belongs to (-1: the room itself - walls, floor, stairs...)
++static int OwnerOf(int room, int dl, const Vtx* a, const Vtx* b, const Vtx* c, int texOrd) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +        const HomeObj& o = sObjs[i];
 +        if (o.room != room) continue;
++        if (o.texDl != 0) {
++            if (o.texDl == dl && o.texOrd == texOrd) return i;
++            continue;
++        }
 +        bool has = false;
 +        for (int k = 0; k < o.partCount; k++) has |= ((o.parts[k] & 0xFFFFFF) == dl);
 +        if (!has) continue;
-+        if (x >= o.bb[0] - 2 && x <= o.bb[1] + 2 && y >= o.bb[2] - 2 && y <= o.bb[3] + 2 && z >= o.bb[4] - 2 &&
-+            z <= o.bb[5] + 2) {
-+            return i;
-+        }
++        if (InBox(o.bb, a) && InBox(o.bb, b) && InBox(o.bb, c)) return i;
 +    }
 +    return -1;
 +}
@@ -8261,20 +8363,12 @@ index 0000000..999d14d
 +// the managed pieces of one room, opaque or see-through
 +static std::vector<std::pair<int, std::string>> RoomPieces(int room, bool xlu) {
 +    std::vector<std::pair<int, std::string>> out;
-+    std::vector<int> seen;
-+    auto add = [&](int code) {
-+        if (((code & XLU) != 0) != xlu) return;
-+        int off = code & 0xFFFFFF;
-+        for (int v : seen) if (v == off) return;
-+        seen.push_back(off);
++    for (s32 i = 0; i < ROOMDL_COUNT; i++) {
++        if (sRoomDLs[i].room != room || ((sRoomDLs[i].code & XLU) != 0) != xlu) continue;
++        int off = sRoomDLs[i].code & 0xFFFFFF;
 +        std::string p = FindRoomDL("Z2_OMOYA", room, off);
 +        if (!p.empty()) out.push_back({ off, p });
-+    };
-+    for (s32 i = 0; i < OBJ_COUNT; i++) {
-+        if (sObjs[i].room != room) continue;
-+        for (int k = 0; k < sObjs[i].partCount; k++) add(sObjs[i].parts[k]);
 +    }
-+    if (!xlu) add(sWallDL[room]);
 +    return out;
 +}
 +
@@ -8291,7 +8385,7 @@ index 0000000..999d14d
 +            f.tint[1] = sPaint[c][1];
 +            f.tint[2] = sPaint[c][2];
 +        }
-+        f.keep = [room, dl](f32 x, f32 y, f32 z) { return OwnerOf(room, dl, x, y, z) < 0; };
++        f.keep = [room, dl](const Vtx* a, const Vtx* b, const Vtx* c, int ord) { return OwnerOf(room, dl, a, b, c, ord) < 0; };
 +        CopiedMesh part;
 +        if (!BuildMesh({ pc.second }, f, part)) return false;
 +        out.keep.insert(out.keep.end(), part.keep.begin(), part.keep.end());
@@ -8310,7 +8404,7 @@ index 0000000..999d14d
 +static bool BuildHomeMeshes() {
 +    if (sHM != nullptr && sHM->built) return true;
 +    sHM = new HomeMeshes();
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +        const HomeObj& o = sObjs[i];
 +        for (int pass = 0; pass < 2; pass++) {
 +            std::vector<std::string> paths;
@@ -8336,7 +8430,9 @@ index 0000000..999d14d
 +                }
 +                CopyFilter f = AllOf();
 +                int room = o.room;
-+                f.keep = [room, dl, i](f32 x, f32 y, f32 z) { return OwnerOf(room, dl, x, y, z) == i; };
++                f.keep = [room, dl, i](const Vtx* a, const Vtx* b, const Vtx* c, int ord) {
++                    return OwnerOf(room, dl, a, b, c, ord) == i;
++                };
 +                CopiedMesh part;
 +                if (!BuildMesh({ path }, f, part)) {
 +                    ok = false;
@@ -8377,6 +8473,85 @@ index 0000000..999d14d
 +    }
 +}
 +
++// the room's own collision for furniture: switched off while you're home (restored when you leave)
++static std::vector<std::pair<s32, u16>> sMutedPolys;
++static bool sCollisionMuted = false;
++
++static void MuteFurnitureCollision(PlayState* play, bool mute) {
++    if (mute == sCollisionMuted) return;
++    CollisionHeader* col = play->colCtx.colHeader;
++    if (col == nullptr || col->polyList == nullptr || col->vtxList == nullptr) return;
++    if (!mute) {
++        for (auto& pr : sMutedPolys) {
++            if (pr.first < col->numPolygons) col->polyList[pr.first].vtxData[0] = pr.second;
++        }
++        sMutedPolys.clear();
++        sCollisionMuted = false;
++        return;
++    }
++    sCollisionMuted = true;
++    for (s32 p = 0; p < col->numPolygons; p++) {
++        CollisionPoly* poly = &col->polyList[p];
++        Vtx v[3];
++        for (int k = 0; k < 3; k++) {
++            Vec3s* cv = &col->vtxList[COLPOLY_VTX_INDEX(poly->vtxData[k])];
++            v[k].v.ob[0] = cv->x;
++            v[k].v.ob[1] = cv->y;
++            v[k].v.ob[2] = cv->z;
++        }
++        // the floor stays: a flat, upward-facing poly at floor height
++        f32 ny = COLPOLY_GET_NORMAL(poly->normal.y);
++        int room = (v[0].v.ob[1] > 200 || v[1].v.ob[1] > 200) ? 2 : 1;
++        f32 floorY = room == 2 ? 260.0f : 0.0f;
++        if (ny > 0.9f && fabsf(v[0].v.ob[1] - floorY) < 3.0f && fabsf(v[1].v.ob[1] - floorY) < 3.0f) continue;
++        // the house's own walls stay solid
++        {
++            f32 wx0 = room == 2 ? 779.0f : 600.0f, wx1 = room == 2 ? 1188.0f : 1204.0f;
++            f32 wz0 = room == 2 ? -180.0f : -320.0f, wz1 = room == 2 ? 200.0f : 302.0f;
++            bool onWall = true;
++            for (int k = 0; k < 3 && onWall; k++) {
++                f32 x = v[k].v.ob[0], z = v[k].v.ob[2];
++                onWall = fabsf(x - wx0) < 4 || fabsf(x - wx1) < 4 || fabsf(z - wz0) < 4 || fabsf(z - wz1) < 4;
++            }
++            if (onWall && fabsf(ny) < 0.3f) continue;
++        }
++        for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
++            const HomeObj& o = sObjs[i];
++            if (o.texDl != 0 || o.room != room) continue;
++            if (InBox(o.bb, &v[0]) && InBox(o.bb, &v[1]) && InBox(o.bb, &v[2])) {
++                sMutedPolys.push_back({ p, poly->vtxData[0] });
++                poly->vtxData[0] |= (COLPOLY_IGNORE_ENTITY << 13);
++                break;
++            }
++        }
++    }
++}
++
++static Vec3f ObjCentre(s32 i);
++// every piece of furniture is solid where it stands now (except a rug, and the chair you're sitting on)
++static void PushOutOfFurniture(Vec3f* p, s32 skip) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
++        const HomeObj& o = sObjs[i];
++        if (i == skip || o.texDl != 0 || sHome.obj[i].deleted) continue;
++        if (o.bb[3] - o.bb[2] < 8 || o.bb[1] - o.bb[0] < 2 || o.bb[5] - o.bb[4] < 2) continue; // flat or on a wall
++        f32 floorY = (o.room == 2) ? 260.0f : 0.0f;
++        if (o.bb[2] > floorY + 60.0f) continue; // up on a shelf: you walk under it
++        if (p->y > o.bb[3] + 5.0f || p->y < o.bb[2] - 60.0f) continue;
++        f32 cx = (o.bb[0] + o.bb[1]) * 0.5f, cz = (o.bb[4] + o.bb[5]) * 0.5f;
++        // the box turns with the object: test in its own frame
++        s16 yaw = sHome.obj[i].yaw;
++        f32 hx = (o.bb[1] - o.bb[0]) * 0.5f + 10.0f, hz = (o.bb[5] - o.bb[4]) * 0.5f + 10.0f;
++        f32 dx = p->x - (cx + sHome.obj[i].dx), dz = p->z - (cz + sHome.obj[i].dz);
++        f32 c = Math_CosS(yaw), sn = Math_SinS(yaw);
++        f32 lx = dx * c - dz * sn, lz = dx * sn + dz * c;
++        if (fabsf(lx) >= hx || fabsf(lz) >= hz) continue;
++        if (hx - fabsf(lx) < hz - fabsf(lz)) lx = (lx < 0) ? -hx : hx;
++        else lz = (lz < 0) ? -hz : hz;
++        p->x = cx + sHome.obj[i].dx + lx * c + lz * sn;
++        p->z = cz + sHome.obj[i].dz - lx * sn + lz * c;
++    }
++}
++
 +static Vec3f ObjCentre(s32 i) {
 +    const HomeObj& o = sObjs[i];
 +    Vec3f c = { (o.bb[0] + o.bb[1]) * 0.5f + sHome.obj[i].dx, (f32)o.bb[2], (o.bb[4] + o.bb[5]) * 0.5f + sHome.obj[i].dz };
@@ -8393,7 +8568,7 @@ index 0000000..999d14d
 +    for (int room = 1; room <= 2; room++) {
 +        if (sHM->restOpa[room].ok) gSPDisplayList(POLY_OPA_DISP++, sHM->restOpa[room].gfx.data());
 +    }
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +        if (sHome.obj[i].deleted || !sHM->objOpa[i].ok) continue;
 +        const HomeObj& o = sObjs[i];
 +        f32 cx = (o.bb[0] + o.bb[1]) * 0.5f, cz = (o.bb[4] + o.bb[5]) * 0.5f;
@@ -8409,7 +8584,7 @@ index 0000000..999d14d
 +    for (int room = 1; room <= 2; room++) {
 +        if (sHM->restXlu[room].ok) gSPDisplayList(POLY_XLU_DISP++, sHM->restXlu[room].gfx.data());
 +    }
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +        if (sHome.obj[i].deleted || !sHM->objXlu[i].ok) continue;
 +        const HomeObj& o = sObjs[i];
 +        f32 cx = (o.bb[0] + o.bb[1]) * 0.5f, cz = (o.bb[4] + o.bb[5]) * 0.5f;
@@ -8425,16 +8600,18 @@ index 0000000..999d14d
 +// ---- arrange mode (touch screen), painting, sitting
 +static std::atomic<int> sArrange{ 0 };         // Arrange mode on
 +static std::atomic<int> sSelected{ -1 };       // object being arranged
-+static std::atomic<int> sScreenPos[32 * 3];    // per object: x, y (x1000, -1..1) and visible
++static std::atomic<int> sScreenPos[40 * 4];    // per object: x, y (x1000, -1..1), visible, is a chair
 +static std::atomic<int> sEditOp{ 0 }, sEditId{ -1 }, sEditA{ 0 }, sEditB{ 0 };
 +static std::atomic<int> sPaintReq{ -1 };
 +static std::atomic<int> sSitReq{ 0 };
 +static std::atomic<int> sNearChair{ -1 };
 +static s32 sSitting = 0; // 0 no, 1 sitting down, 2 seated, 3 standing up
++static s32 sSitChair = -1;
++static std::atomic<int> sSitStand{ 0 };
 +static u32 sSitFrame = 0;
 +
 +static void UpdateScreenPositions(PlayState* play) {
-+    for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++    for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +        Vec3f c = ObjCentre(i);
 +        c.y += (sObjs[i].bb[3] - sObjs[i].bb[2]) * 0.5f;
 +        Vec3f proj;
@@ -8442,9 +8619,10 @@ index 0000000..999d14d
 +        SkinMatrix_Vec3fMtxFMultXYZW(&play->viewProjectionMtxF, &c, &proj, &w);
 +        bool vis = (w > 1.0f) && !sHome.obj[i].deleted;
 +        f32 inv = 1.0f / fmaxf(w, 1.0f);
-+        sScreenPos[i * 3] = (int)(proj.x * inv * 1000.0f);
-+        sScreenPos[i * 3 + 1] = (int)(proj.y * inv * 1000.0f);
-+        sScreenPos[i * 3 + 2] = vis ? 1 : 0;
++        sScreenPos[i * 4] = (int)(proj.x * inv * 1000.0f);
++        sScreenPos[i * 4 + 1] = (int)(proj.y * inv * 1000.0f);
++        sScreenPos[i * 4 + 2] = vis ? 1 : 0;
++        sScreenPos[i * 4 + 3] = sObjs[i].isChair;
 +    }
 +}
 +
@@ -8459,7 +8637,7 @@ index 0000000..999d14d
 +static void ApplyEdit(PlayState* play) {
 +    int op = sEditOp.exchange(0);
 +    int id = sEditId.load();
-+    if (op == 0 || id < 0 || id >= OBJ_COUNT || id >= 32) return;
++    if (op == 0 || id < 0 || id >= OBJ_COUNT || id >= 40) return;
 +    ObjState& st = sHome.obj[id];
 +    const HomeObj& o = sObjs[id];
 +    switch (op) {
@@ -8503,7 +8681,7 @@ index 0000000..999d14d
 +static void UpdateSitting(PlayState* play, Player* player) {
 +    sNearChair = -1;
 +    if (sSitting == 0) {
-+        for (s32 i = 0; i < OBJ_COUNT && i < 32; i++) {
++        for (s32 i = 0; i < OBJ_COUNT && i < 40; i++) {
 +            if (!sObjs[i].isChair || sHome.obj[i].deleted) continue;
 +            Vec3f c = ObjCentre(i);
 +            if (Math_Vec3f_DistXZ(&player->actor.world.pos, &c) < 55.0f && fabsf(player->actor.world.pos.y - c.y) < 40.0f) {
@@ -8512,8 +8690,12 @@ index 0000000..999d14d
 +        }
 +    }
 +    int req = sSitReq.exchange(0);
-+    if (sSitting == 0 && req && sNearChair.load() >= 0) {
-+        s32 i = sNearChair.load();
++    if (sSitting == 0 && req > 0 && req - 1 < OBJ_COUNT && sObjs[req - 1].isChair && !sHome.obj[req - 1].deleted) {
++        s32 i = req - 1;
++        Vec3f cc = ObjCentre(i);
++        if (Math_Vec3f_DistXZ(&player->actor.world.pos, &cc) > 400.0f || fabsf(player->actor.world.pos.y - cc.y) > 60.0f) {
++            return; // too far away (another room)
++        }
 +        Vec3f c = ObjCentre(i);
 +        player->actor.world.pos.x = c.x;
 +        player->actor.world.pos.z = c.z;
@@ -8524,6 +8706,7 @@ index 0000000..999d14d
 +        }
 +        player->actor.shape.rot.y = player->actor.world.rot.y = Math_Vec3f_Yaw(&c, &table);
 +        Player_SetCsActionWithHaltedActors(play, NULL, PLAYER_CSACTION_118);
++        sSitChair = i;
 +        sSitting = 1;
 +        sSitFrame = play->gameplayFrames;
 +        return;
@@ -8531,13 +8714,14 @@ index 0000000..999d14d
 +    if (sSitting == 1 && play->gameplayFrames - sSitFrame > 30) {
 +        Player_SetCsActionWithHaltedActors(play, NULL, PLAYER_CSACTION_119);
 +        sSitting = 2;
-+    } else if (sSitting == 2 && req) {
++    } else if (sSitting == 2 && req == 0 && sSitStand.exchange(0)) {
 +        Player_SetCsActionWithHaltedActors(play, NULL, PLAYER_CSACTION_120);
 +        sSitting = 3;
 +        sSitFrame = play->gameplayFrames;
 +    } else if (sSitting == 3 && play->gameplayFrames - sSitFrame > 25) {
 +        Player_SetCsActionWithHaltedActors(play, NULL, PLAYER_CSACTION_END);
 +        sSitting = 0;
++        sSitChair = -1;
 +    }
 +}
 +
@@ -8552,10 +8736,15 @@ index 0000000..999d14d
 +        return;
 +    }
 +    HideOriginals(true);
-+    // repaint if the colour changed
++    MuteFurnitureCollision(play, true);
++    if (sSitting == 0) PushOutOfFurniture(&player->actor.world.pos, -1);
++    // repaint if the colour changed (copy from the real walls: show them for a moment while copying)
 +    for (int room = 1; room <= 2; room++) {
 +        if (sBuiltWallColour[room] != sHome.wallColour[room]) {
-+            BuildRest(room, false, sHM->restOpa[room]);
++            HideOriginals(false);
++            CopiedMesh fresh;
++            if (BuildRest(room, false, fresh)) sHM->restOpa[room] = std::move(fresh);
++            HideOriginals(true);
 +            sBuiltWallColour[room] = sHome.wallColour[room];
 +        }
 +    }
@@ -8635,7 +8824,7 @@ index 0000000..999d14d
 +        }
 +        UndoStep u = sHomeUndo.back();
 +        sHomeUndo.pop_back();
-+        if (u.kind == 0 && u.index >= 0 && u.index < 32) {
++        if (u.kind == 0 && u.index >= 0 && u.index < 40) {
 +            sHome.obj[u.index] = u.prev;
 +        } else if (u.kind == 1) {
 +            for (s32 i = sHome.count - 1; i >= 0; i--) {
@@ -8853,6 +9042,11 @@ index 0000000..999d14d
 +    else p->z = z1;
 +}
 +
++static void HomeNoVisitors(Actor* actor, bool* should) {
++    if (gPlayState == nullptr || gPlayState->sceneId != SCENE_OMOYA || !(sAtHome || sGoingHome)) return;
++    if (actor->category == ACTORCAT_NPC) *should = false;
++}
++
 +// The area name when you walk into your home
 +static void HomeTitle(u16* textId, bool* loadFromMessageTable) {
 +    if (!(sGoingHome || sAtHome)) return;
@@ -8882,6 +9076,8 @@ index 0000000..999d14d
 +        } else if (play->sceneId != SCENE_OMOYA) {
 +            sAtHome = false;
 +        }
++        sCollisionMuted = false; // a new area: its collision is fresh
++        sMutedPolys.clear();
 +        if (!sAtHome) {
 +            HideOriginals(false); // the real ranch house is unchanged
 +            sArrange = 0;
@@ -8909,7 +9105,7 @@ index 0000000..999d14d
 +        UpdateDecorating(play, player);
 +        // stove (kitchen, downstairs) and wardrobe (bedroom)
 +        Vec3f stove = { 695.0f, 0.0f, 120.0f }, wardrobe = { 1110.0f, 260.0f, -120.0f };
-+        for (s32 t = 0; t < OBJ_COUNT && t < 32; t++) {
++        for (s32 t = 0; t < OBJ_COUNT && t < 40; t++) {
 +            if (strcmp(sObjs[t].name, "kitchen counter") == 0) {
 +                stove.x += sHome.obj[t].dx;
 +                stove.z += sHome.obj[t].dz;
@@ -8933,7 +9129,7 @@ index 0000000..999d14d
 +        int tunic = sTunicReq.exchange(-1);
 +        if (tunic >= 0 && sStation.load() == 2) SetTunic(tunic);
 +        Vec3f bed = { 865.0f, 260.0f, -112.0f };
-+        for (s32 t = 0; t < OBJ_COUNT && t < 32; t++) {
++        for (s32 t = 0; t < OBJ_COUNT && t < 40; t++) {
 +            if (strcmp(sObjs[t].name, "bed") == 0) {
 +                bed.x += sHome.obj[t].dx;
 +                bed.z += sHome.obj[t].dz;
@@ -8943,8 +9139,17 @@ index 0000000..999d14d
 +        sNearDoor = !Play_InCsMode(play) && (Math_Vec3f_DistXZ(&player->actor.world.pos, &bed) < 150.0f) &&
 +                    (fabsf(player->actor.world.pos.y - bed.y) < 60.0f);
 +        // any way out of the house leads back to your front door in Termina Field
++        // only the front door leads out: anything else trying to send you away (a ranch event) is ignored
++        Vec3f frontDoor = { 1070.0f, 0.0f, 220.0f };
++        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
++            Math_Vec3f_DistXZ(&player->actor.world.pos, &frontDoor) > 160.0f) {
++            play->transitionTrigger = TRANS_TRIGGER_OFF;
++            if (play->msgCtx.msgMode != MSGMODE_NONE) Message_CloseTextbox(play);
++        }
 +        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
 +            sHouse.valid) {
++            MuteFurnitureCollision(play, false);
++            HideOriginals(false);
 +            Vec3f out = { HOUSE_DOOR_X - 90.0f, HOUSE_Y, HOUSE_DOOR_Z };
 +            sAtHome = false;
 +            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), out, (s16)-0x4000, 0);
@@ -9314,6 +9519,7 @@ index 0000000..999d14d
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateUpdate>(OnGameStateUpdate);
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawWorldEnd>(DrawWorldExtras);
 +        GameInteractor::Instance->RegisterGameHookForID<GameInteractor::OnOpenText>(0x0132, HomeTitle);
++        GameInteractor::Instance->RegisterGameHook<GameInteractor::ShouldActorInit>(HomeNoVisitors);
 +        LoadHouse();
 +        ReadSnapshotFile();
 +    }
@@ -9402,10 +9608,11 @@ index 0000000..999d14d
 +// { valid, x*1000, y*1000, distance, behind } for the objective marker
 +// Arrange mode: { object count, then per object: screen x, screen y (x1000, -1..1), visible }
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetHomeObjects(JNIEnv* env, jobject) {
-+    int n = (sHM != nullptr && sHM->built && sAtHome) ? MIN(OBJ_COUNT, 32) : 0;
-+    std::vector<jint> vals(1 + n * 3);
++    int n = (sHM != nullptr && sHM->built && sAtHome) ? MIN(OBJ_COUNT, 40) : 0;
++    std::vector<jint> vals(2 + n * 4);
 +    vals[0] = n;
-+    for (int i = 0; i < n * 3; i++) vals[1 + i] = sScreenPos[i].load();
++    vals[1] = sSitting != 0 ? 1 : 0; // seated (tap anywhere to stand)
++    for (int i = 0; i < n * 4; i++) vals[2 + i] = sScreenPos[i].load();
 +    jintArray arr = env->NewIntArray((jsize)vals.size());
 +    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, (jsize)vals.size(), vals.data());
 +    return arr;
@@ -9553,7 +9760,10 @@ index 0000000..999d14d
 +    if (option == 17) sTunicReq = value;       // tunic colour (at the wardrobe)
 +    if (option == 18) sHouseMenuReq = value;   // 1 undo, 2 furniture reset, 3 take down all, 4 walls reset
 +    if (option == 19) sPaintReq = value;       // paint the walls of the room you're in
-+    if (option == 20) sSitReq = 1;             // sit down / stand up
++    if (option == 20) {                        // tap a chair: sit (chair index + 1); tap anywhere else: stand
++        if (value == 0) sSitStand = 1;
++        else sSitReq = value;
++    }
 +    if (option == 21) {                        // Arrange mode on/off
 +        sArrange = value;
 +        if (!value) sSelected = -1;
