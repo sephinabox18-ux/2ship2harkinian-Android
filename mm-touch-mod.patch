@@ -6019,10 +6019,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..a81d440
+index 0000000..8a6a11c
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2207 @@
+@@ -0,0 +1,2290 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7265,146 +7265,277 @@ index 0000000..a81d440
 +    }
 +}
 +
-+// ---------------------------------------------------------------- your house in Termina Field
-+// Link's house is a copy of the Mountain Smithy cabin (spring version), drawn from the game's own
-+// Mountain Village mesh pieces, standing on the raised grass patch outside Milk Road. Walk into its door
-+// and you go inside: the smithy's own interior, emptied out, as your home. Rest there, and your masks hang
-+// on the wall. Epona's paddock stands beside it.
++// ---------------------------------------------------------------- Link's house in Termina Field
++// A copy of the Romani Ranch house, standing on the raised grass patch outside Milk Road, with a soft blue
++// tint so it's its own place. Walking into its door takes you inside: the ranch house's real interior, with
++// nobody in it and a single bed upstairs. Rest there for as long as you like; your masks hang on the wall.
++//
++// Crash safety, after earlier attempts:
++//  - The game is never asked to draw another area's data. When Termina Field loads, the house's triangles
++//    are COPIED out of the Romani Ranch mesh into the mod's own memory, and only that copy is drawn.
++//  - Every piece is looked up and type-checked before use. Anything unexpected (missing data, a command the
++//    copier doesn't know) means the house simply isn't built - it never draws half-understood data.
++//  - Only triangles inside the house's footprint are kept, so ranch signs, fences and the ground are left out.
++#include "fast/resource/type/DisplayList.h"
++#include "ship/resource/ResourceManager.h"
++#include "ship/resource/archive/ArchiveManager.h"
++#include "fast/resource/type/Vertex.h"
 +extern "C" uint8_t ResourceMgr_FileExists(const char* resName);
 +extern "C" void ResourceMgr_PatchGfxByName(const char* path, const char* patchName, int index, Gfx instruction);
 +extern "C" void ResourceMgr_UnpatchGfxByName(const char* path, const char* patchName);
 +
-+// Find a room display list in the game data. The archive's folder naming can differ between builds, so try
-+// both forms; returns "" if it isn't there (then it's simply not drawn - never a crash).
++static std::shared_ptr<Ship::IResource> LoadTyped(const std::string& path, Fast::ResourceType type) {
++    if (path.empty()) return nullptr;
++    std::string clean = (path.rfind("__OTR__", 0) == 0) ? path.substr(7) : path;
++    if (!ResourceMgr_FileExists(clean.c_str())) return nullptr;
++    auto res = Ship::Context::GetRawInstance()->GetResourceManager()->LoadResource(clean);
++    if (res == nullptr || res->GetInitData() == nullptr || res->GetInitData()->Type != (uint32_t)type) return nullptr;
++    return res;
++}
++
++// A room display list's name: the archive's folder naming differs between builds, so try both forms
 +static std::string FindRoomDL(const char* scene, int roomNum, int offset) {
-+    // "__OTR__" marks the string as a resource name for gSPDisplayList (without it the text itself
-+    // would be treated as graphics commands)
 +    char a[180], b[180];
-+    snprintf(a, sizeof(a), "__OTR__scenes/nonmq/%s/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
-+    snprintf(b, sizeof(b), "__OTR__scenes/nonmq/%s_scene/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    snprintf(a, sizeof(a), "scenes/nonmq/%s/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
++    snprintf(b, sizeof(b), "scenes/nonmq/%s_scene/%s_room_%02dDL_%06X", scene, scene, roomNum, offset);
 +    if (ResourceMgr_FileExists(a)) return a;
 +    if (ResourceMgr_FileExists(b)) return b;
 +    return "";
 +}
 +
-+struct WallBoxXZ {
-+    f32 x0, x1, z0, z1;
-+};
-+
-+struct RoomPiece {
-+    const char* scene;
-+    int room;
-+    int offset;
-+    std::string path; // resolved once
-+    bool resolved;
-+};
-+
-+static Gfx* PieceDL(RoomPiece& p) {
-+    if (!p.resolved) {
-+        p.path = FindRoomDL(p.scene, p.room, p.offset);
-+        p.resolved = true;
-+        if (p.path.empty()) Crumb(std::string("missing room piece ") + p.scene);
-+    }
-+    return p.path.empty() ? nullptr : (Gfx*)p.path.c_str();
++static std::string HashToPath(uint64_t hash) {
++    const char* p = Ship::Context::GetRawInstance()->GetResourceManager()->GetArchiveManager()->HashToCString(hash);
++    return p != nullptr ? std::string(p) : std::string();
 +}
 +
++// ---- the copier
++struct CopiedMesh {
++    std::vector<Gfx> gfx;                       // our own display list (never resized after building)
++    std::vector<std::unique_ptr<Vtx[]>> verts;  // our own vertex copies
++    std::vector<std::shared_ptr<Ship::IResource>> keep; // resources whose strings/textures we point into
++    bool ok = false;
++};
++
++struct CopyFilter {
++    // keep a triangle only if all its corners are inside this rotated rectangle (source coordinates)
++    f32 cx, cz, cosA, sinA, halfX, halfZ, yMin, yMax;
++    u8 tint[3]; // vertex colour multiplier (out of 255)
++    bool Inside(const Vtx& v) const {
++        f32 dx = v.v.ob[0] - cx, dz = v.v.ob[2] - cz;
++        f32 lx = dx * cosA - dz * sinA, lz = dx * sinA + dz * cosA;
++        return fabsf(lx) <= halfX && fabsf(lz) <= halfZ && v.v.ob[1] >= yMin && v.v.ob[1] <= yMax;
++    }
++};
++
++static Gfx MakeTri1(u8 a, u8 b, u8 c) {
++    Gfx g;
++    memset(&g, 0, sizeof(g));
++    g.words.w0 = ((uintptr_t)0x05 << 24) | ((uintptr_t)(a * 2) << 16) | ((uintptr_t)(b * 2) << 8) | (uintptr_t)(c * 2);
++    g.words.w1 = 0;
++    return g;
++}
++
++// returns false if anything is unexpected (then the whole mesh is abandoned)
++static bool CopyDL(Fast::DisplayList* dl, const CopyFilter& f, CopiedMesh& out, Vtx* slots[64], bool slotIn[64],
++                   int depth) {
++    if (dl == nullptr || depth > 4) return false;
++    std::vector<Gfx>& ins = dl->Instructions;
++    for (size_t i = 0; i < ins.size(); i++) {
++        Gfx g = ins[i];
++        u8 op = (u8)(g.words.w0 >> 24);
++        switch (op) {
++            case 0xDF: // end of this list
++                return true;
++            case 0x32: { // vertices, by resource hash
++                if (i + 1 >= ins.size()) return false;
++                u32 n = (g.words.w0 >> 12) & 0xFF, end = (g.words.w0 >> 1) & 0x7F;
++                uintptr_t off = g.words.w1;
++                Gfx h = ins[++i];
++                uint64_t hash = ((uint64_t)(u32)h.words.w0 << 32) + (u32)h.words.w1;
++                if (n == 0 || end < n || end > 64 || off > 0xFFFFF) return false;
++                auto res = LoadTyped(HashToPath(hash), Fast::ResourceType::Vertex);
++                if (res == nullptr) return false;
++                auto vres = std::static_pointer_cast<Fast::Vertex>(res);
++                size_t first = off / sizeof(Vtx);
++                if (off % sizeof(Vtx) != 0 || first + n > vres->VertexList.size()) return false;
++                std::unique_ptr<Vtx[]> block(new Vtx[n]);
++                u32 v0 = end - n;
++                for (u32 k = 0; k < n; k++) {
++                    block[k] = vres->VertexList[first + k];
++                    for (int c = 0; c < 3; c++) block[k].v.cn[c] = (u8)((block[k].v.cn[c] * f.tint[c]) / 255);
++                    slots[v0 + k] = &block[k];
++                    slotIn[v0 + k] = f.Inside(block[k]);
++                }
++                Gfx cmd;
++                memset(&cmd, 0, sizeof(cmd));
++                gSPVertex(&cmd, (uintptr_t)block.get(), n, v0);
++                out.gfx.push_back(cmd);
++                out.verts.push_back(std::move(block));
++                break;
++            }
++            case 0x24: { // vertices, by resource name (2 words)
++                if (i + 1 >= ins.size()) return false;
++                const char* name = (const char*)g.words.w1;
++                Gfx h = ins[++i];
++                u32 n = (u32)h.words.w0, v0 = (u32)(h.words.w1 >> 16), first = (u32)(h.words.w1 & 0xFFFF);
++                if (name == nullptr || n == 0 || v0 + n > 64) return false;
++                auto res = LoadTyped(name, Fast::ResourceType::Vertex);
++                if (res == nullptr) return false;
++                auto vres = std::static_pointer_cast<Fast::Vertex>(res);
++                if (first + n > vres->VertexList.size()) return false;
++                std::unique_ptr<Vtx[]> block(new Vtx[n]);
++                for (u32 k = 0; k < n; k++) {
++                    block[k] = vres->VertexList[first + k];
++                    for (int c = 0; c < 3; c++) block[k].v.cn[c] = (u8)((block[k].v.cn[c] * f.tint[c]) / 255);
++                    slots[v0 + k] = &block[k];
++                    slotIn[v0 + k] = f.Inside(block[k]);
++                }
++                Gfx cmd;
++                memset(&cmd, 0, sizeof(cmd));
++                gSPVertex(&cmd, (uintptr_t)block.get(), n, v0);
++                out.gfx.push_back(cmd);
++                out.verts.push_back(std::move(block));
++                break;
++            }
++            case 0x05: { // one triangle
++                u8 a = ((g.words.w0 >> 16) & 0xFF) / 2, b = ((g.words.w0 >> 8) & 0xFF) / 2, c = (g.words.w0 & 0xFF) / 2;
++                if (a < 64 && b < 64 && c < 64 && slots[a] && slots[b] && slots[c] && slotIn[a] && slotIn[b] && slotIn[c]) {
++                    out.gfx.push_back(MakeTri1(a, b, c));
++                }
++                break;
++            }
++            case 0x06:   // two triangles
++            case 0x07: { // quad (same layout)
++                u32 w[2] = { (u32)g.words.w0, (u32)g.words.w1 };
++                for (int t = 0; t < 2; t++) {
++                    u8 a = ((w[t] >> 16) & 0xFF) / 2, b = ((w[t] >> 8) & 0xFF) / 2, c = (w[t] & 0xFF) / 2;
++                    if (a < 64 && b < 64 && c < 64 && slots[a] && slots[b] && slots[c] && slotIn[a] && slotIn[b] &&
++                        slotIn[c]) {
++                        out.gfx.push_back(MakeTri1(a, b, c));
++                    }
++                }
++                break;
++            }
++            case 0x20: // texture by hash (2 words) - the interpreter loads it itself
++                if (i + 1 >= ins.size()) return false;
++                out.gfx.push_back(g);
++                out.gfx.push_back(ins[++i]);
++                break;
++            case 0x25: // texture by name (1 word, the name lives in this display list)
++                out.gfx.push_back(g);
++                break;
++            case 0x31: { // call another display list, by hash
++                if (i + 1 >= ins.size()) return false;
++                Gfx h = ins[++i];
++                uint64_t hash = ((uint64_t)(u32)h.words.w0 << 32) + (u32)h.words.w1;
++                auto res = LoadTyped(HashToPath(hash), Fast::ResourceType::DisplayList);
++                if (res == nullptr) return false;
++                out.keep.push_back(res);
++                if (!CopyDL(std::static_pointer_cast<Fast::DisplayList>(res).get(), f, out, slots, slotIn, depth + 1))
++                    return false;
++                if ((g.words.w0 >> 16) & 1) return true; // branch: this list ends here
++                break;
++            }
++            case 0x27: { // call another display list, by name
++                const char* name = (const char*)g.words.w1;
++                if (name == nullptr) return false;
++                auto res = LoadTyped(name, Fast::ResourceType::DisplayList);
++                if (res == nullptr) return false;
++                out.keep.push_back(res);
++                if (!CopyDL(std::static_pointer_cast<Fast::DisplayList>(res).get(), f, out, slots, slotIn, depth + 1))
++                    return false;
++                if ((g.words.w0 >> 16) & 1) return true;
++                break;
++            }
++            case 0x33: // marker (2 words): skip
++                i++;
++                break;
++            case 0x00: // no-op
++            case 0x34: // invalidate texture cache
++            case 0xDA: // matrices / lights / segments / raw pointers: not ours to copy
++            case 0xD8:
++            case 0xDC:
++            case 0xDE:
++            case 0xFD: // raw (segment) texture address
++            case 0x28:
++            case 0x29:
++            case 0x36:
++                break;
++            default:
++                // plain render-state commands (combiner, modes, tiles, colours, loads, syncs, geometry mode...)
++                if (op >= 0xD7 || op == 0xD9 || op == 0xDB) {
++                    out.gfx.push_back(g);
++                    break;
++                }
++                return false; // something unexpected: don't build
++        }
++    }
++    return true;
++}
++
++static bool BuildMesh(const std::vector<std::string>& paths, const CopyFilter& f, CopiedMesh& out) {
++    out = CopiedMesh();
++    out.gfx.reserve(4096);
++    for (auto& path : paths) {
++        auto res = LoadTyped(path, Fast::ResourceType::DisplayList);
++        if (res == nullptr) return false;
++        out.keep.push_back(res);
++        Vtx* slots[64] = {};
++        bool slotIn[64] = {};
++        Gfx pipe;
++        memset(&pipe, 0, sizeof(pipe));
++        gDPPipeSync(&pipe);
++        out.gfx.push_back(pipe);
++        if (!CopyDL(std::static_pointer_cast<Fast::DisplayList>(res).get(), f, out, slots, slotIn, 0)) return false;
++    }
++    Gfx end;
++    memset(&end, 0, sizeof(end));
++    gSPEndDisplayList(&end);
++    out.gfx.push_back(end);
++    if (out.gfx.size() > 4000) return false; // far more than a house: something's wrong
++    out.ok = true;
++    return true;
++}
++
++// ---- the house
 +struct HouseData {
 +    u32 magic;
 +    s32 valid;
 +};
-+static HouseData sHouse = { 0x48534535, 1 };
++static HouseData sHouse = { 0x48534536, 1 };
 +static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = house on, 2 = house off
-+static std::atomic<int> sNearDoor{ 0 };      // inside your home (rest available)
++static std::atomic<int> sNearDoor{ 0 };      // by your bed (rest available)
 +static std::atomic<int> sEnterReq{ 0 };
 +static std::atomic<int> sRestReq{ -1 };      // hours to rest
 +static bool sRestPending = false;
 +static u16 sRestTime = 0;
 +static s32 sRestDay = 0;
-+static bool sAtHome = false;        // inside your home right now
-+static bool sGoingHome = false;     // walking through the door
++static bool sAtHome = false;    // inside your home right now
++static bool sGoingHome = false; // walking through the door
 +static s32 sHouseSceneSeen = -1;
-+static s32 sObjFence = -1;
-+static bool sFencesSpawned = false;
-+static bool sEponaPenned = false;
 +static u32 sDoorCooldownFrame = 0;
-+// mask wall inside the home
++static CopiedMesh sHouseMesh;
++static bool sHouseTried = false;
 +static Vec3f sMaskWallPos;
 +static s16 sMaskWallYaw = 0;
 +static bool sMaskWallFound = false;
++static bool sBedHidden = false;
++static std::string sSecondBedPath, sSecondBedXluPath;
 +
-+// Smithy (Mountain Village) coordinates -> Termina Field: the cabin keeps its orientation (door facing
-+// west, towards Milk Road) and its porch floor sits level with the top of the grass patch (y = -198).
-+#define SMITHY_DX (-2509.0f)
-+#define SMITHY_DY (-269.0f)
-+#define SMITHY_DZ (2530.0f)
-+#define HOME_ENTRANCE ENTRANCE(MOUNTAIN_SMITHY, 0)
-+
-+// The cabin's pieces of the Mountain Village mesh (walls, roof, porch, chimney)
-+static RoomPiece sSmithyDLs[] = {
-+    { "Z2_10YUKIYAMANOMURA2", 0, 0x00A900 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00B3C0 },
-+    { "Z2_10YUKIYAMANOMURA2", 0, 0x009C58 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00B650 },
-+    { "Z2_10YUKIYAMANOMURA2", 0, 0x00C108 }, { "Z2_10YUKIYAMANOMURA2", 0, 0x00C5A8 },
-+    { "Z2_10YUKIYAMANOMURA2", 0, 0x00C810 },
-+};
-+
-+// ---- Inside: a cosy home instead of a workshop.
-+// The smithy's working gear (forge, its hood, anvils, grindstone, workbench, tools) is hidden while you're
-+// home, and the Stock Pot Inn guest room's furniture is placed in: two beds, a table and chairs, a dresser.
-+static RoomPiece sSmithyGear[] = {
-+    { "Z2_KAJIYA", 0, 0x004098 }, { "Z2_KAJIYA", 0, 0x0043D0 }, // forge, forge hood
-+    { "Z2_KAJIYA", 0, 0x008CD0 }, { "Z2_KAJIYA", 0, 0x00B7B8 }, // anvil, grindstone
-+    { "Z2_KAJIYA", 0, 0x006018 }, { "Z2_KAJIYA", 0, 0x00C690 }, // tools, frame
-+    { "Z2_KAJIYA", 0, 0x00BDB0 }, { "Z2_KAJIYA", 0, 0x006DB0 }, // workbench, trough
-+    { "Z2_KAJIYA", 0, 0x00B3D0 }, { "Z2_KAJIYA", 0, 0x00D680 }, // floor plate, forge glow
-+};
-+static RoomPiece sInnFurniture[] = {
-+    { "Z2_YADOYA", 3, 0x001FA8 }, // beds
-+    { "Z2_YADOYA", 3, 0x003888 }, // bed frames, dresser
-+    { "Z2_YADOYA", 3, 0x002BA0 }, // table, stools
-+    { "Z2_YADOYA", 3, 0x004C18 }, // chairs, boxes, plant
-+    { "Z2_YADOYA", 3, 0x0042C8 }, // small things on the table
-+};
-+// inn guest room -> smithy interior (inn floor y 210 -> smithy floor y -15; room centred)
-+#define INN_DX 450.0f
-+#define INN_DY (-225.0f)
-+#define INN_DZ (-240.0f)
-+static bool sGearHidden = false;
-+
-+static void HideSmithyGear(bool hide) {
-+    if (hide == sGearHidden) return;
-+    sGearHidden = hide;
-+    for (auto& p : sSmithyGear) {
-+        if (PieceDL(p) == nullptr) continue;
-+        if (hide) {
-+            ResourceMgr_PatchGfxByName(p.path.c_str(), "mmHomeHide", 0, gsSPEndDisplayList());
-+        } else {
-+            ResourceMgr_UnpatchGfxByName(p.path.c_str(), "mmHomeHide");
-+        }
-+    }
-+}
-+
-+// Furniture you can't walk through (smithy coordinates)
-+static const WallBoxXZ sHomeFurniture[] = {
-+    { -141.0f, -69.0f, 38.0f, 150.0f },  // left bed
-+    { 69.0f, 141.0f, 38.0f, 150.0f },    // right bed
-+    { -50.0f, 11.0f, -76.0f, 0.0f },     // table
-+    { -30.0f, 30.0f, -164.0f, -120.0f }, // dresser
-+};
-+
-+// Solid walls (Termina Field x/z ranges and roof height), taken from the smithy's own collision
-+struct WallBox {
-+    f32 x0, x1, z0, z1, top;
-+};
-+static const WallBox sSmithyWalls[] = {
-+    { 236 + SMITHY_DX, 551 + SMITHY_DX, 582 + SMITHY_DZ, 1018 + SMITHY_DZ, 485 + SMITHY_DY }, // main hall
-+    { 107 + SMITHY_DX, 236 + SMITHY_DX, 681 + SMITHY_DZ, 770 + SMITHY_DZ, 485 + SMITHY_DY },  // porch room, left
-+    { 107 + SMITHY_DX, 236 + SMITHY_DX, 830 + SMITHY_DZ, 919 + SMITHY_DZ, 485 + SMITHY_DY },  // porch room, right
-+    { 147 + SMITHY_DX, 236 + SMITHY_DX, 770 + SMITHY_DZ, 830 + SMITHY_DZ, 485 + SMITHY_DY },  // behind the door
-+};
-+// The doorway: a 60-wide recess in the west wall; the door itself is at x = 147 (smithy coordinates)
-+#define DOOR_X (147 + SMITHY_DX)
-+#define DOOR_Z (800 + SMITHY_DZ)
-+#define DOOR_Y (71 + SMITHY_DY)
++// Source: the ranch house in Romani Ranch (its walls run at -17 degrees). Local frame: 590 x 452, door on
++// the +Z side. Target: the patch outside Milk Road, door facing west (towards Milk Road).
++#define RANCH_HOUSE_CX (-1420.0f)
++#define RANCH_HOUSE_CZ (-1675.5f)
++#define RANCH_HOUSE_FLOOR 255.0f
++#define HOUSE_X (-2200.0f)
++#define HOUSE_Y (-198.0f)
++#define HOUSE_Z (3420.0f)
++#define HOUSE_YAW ((s16)-19500)          // undo the ranch's -17 degrees, then turn the door to face west
++#define HOUSE_HALF_X 226.0f              // world footprint after turning: 452 wide (x) ...
++#define HOUSE_HALF_Z 295.0f              // ... by 590 deep (z)
++#define HOUSE_DOOR_X (HOUSE_X - 206.0f)  // door: local (176, 206) -> world
++#define HOUSE_DOOR_Z (HOUSE_Z + 176.0f)
++#define HOME_ENTRANCE ENTRANCE(RANCH_HOUSE, 1)
 +
 +static std::string HousePath() {
 +    return Ship::Context::GetPathRelativeToAppDirectory("mm_house.bin");
@@ -7413,7 +7544,7 @@ index 0000000..a81d440
 +static void LoadHouse() {
 +    std::ifstream f(HousePath(), std::ios::binary);
 +    HouseData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534535) sHouse.valid = h.valid;
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534536) sHouse.valid = h.valid;
 +}
 +
 +static void SaveHouse() {
@@ -7422,88 +7553,67 @@ index 0000000..a81d440
 +}
 +
 +static bool HouseHere(PlayState* play) {
-+    return sHouse.valid && (play->sceneId == SCENE_00KEIKOKU);
++    return sHouse.valid && (play->sceneId == SCENE_00KEIKOKU) && sHouseMesh.ok;
 +}
 +
-+static void PushOutOfWalls(Vec3f* p) {
-+    for (auto& w : sSmithyWalls) {
-+        if (p->y > w.top) continue;
-+        if (p->x <= w.x0 - 12 || p->x >= w.x1 + 12 || p->z <= w.z0 - 12 || p->z >= w.z1 + 12) continue;
-+        // push out through the nearest side
-+        f32 dl = p->x - (w.x0 - 12), dr = (w.x1 + 12) - p->x, db = p->z - (w.z0 - 12), df = (w.z1 + 12) - p->z;
-+        f32 m = MIN(MIN(dl, dr), MIN(db, df));
-+        if (m == dl) p->x = w.x0 - 12;
-+        else if (m == dr) p->x = w.x1 + 12;
-+        else if (m == db) p->z = w.z0 - 12;
-+        else p->z = w.z1 + 12;
-+    }
-+}
-+
-+static void SpawnPaddock(PlayState* play) {
-+    if (sObjFence < 0) sObjFence = Object_GetSlot(&play->objectCtx, OBJECT_UMAJUMP);
-+    if (sObjFence < 0) sObjFence = Object_SpawnPersistent(&play->objectCtx, OBJECT_UMAJUMP);
-+    if (!sFencesSpawned && sObjFence >= 0 && Object_IsLoaded(&play->objectCtx, sObjFence)) {
-+        sFencesSpawned = true;
-+        // Romani Ranch fence sections are 320 long. Paddock: x -2600..-1960, z 3600..3920, gap front right.
-+        struct { f32 x, z; s16 rot; } fences[] = {
-+            { -2440.0f, 3920.0f, 0 },      { -2120.0f, 3920.0f, 0 },      // back
-+            { -2600.0f, 3760.0f, 0x4000 }, { -1960.0f, 3760.0f, 0x4000 }, // sides
-+            { -2440.0f, 3600.0f, 0 },                                     // front (gap on the right)
-+        };
-+        for (auto& f : fences) {
-+            Actor_Spawn(&play->actorCtx, play, ACTOR_BG_UMAJUMP, f.x, -198.0f, f.z, 0, f.rot, 0, 4); // static fence
++static void TryBuildHouse() {
++    if (sHouseTried) return;
++    sHouseTried = true;
++    std::vector<std::string> paths;
++    for (int off : { 0x0054D8, 0x0034E0 }) { // the house's walls/porch, and the roof piece it shares
++        std::string p = FindRoomDL("Z2_F01", 0, off);
++        if (p.empty()) {
++            Crumb("house: ranch mesh not found");
++            return;
 +        }
++        paths.push_back(p);
 +    }
++    CopyFilter f;
++    f.cx = RANCH_HOUSE_CX;
++    f.cz = RANCH_HOUSE_CZ;
++    f.cosA = cosf(0.29875f); // 17.117 degrees: into the house's own frame
++    f.sinA = sinf(0.29875f);
++    f.halfX = 340.0f; // footprint plus the roof's overhang
++    f.halfZ = 290.0f;
++    f.yMin = 240.0f;
++    f.yMax = 1100.0f;
++    f.tint[0] = 205; // a cool blue-grey, so it's Link's own house and not the ranch's
++    f.tint[1] = 225;
++    f.tint[2] = 255;
++    if (!BuildMesh(paths, f, sHouseMesh)) {
++        sHouseMesh = CopiedMesh();
++        Crumb("house: copy abandoned (unexpected data) - not drawn");
++        return;
++    }
++    Crumb("house: built, " + std::to_string(sHouseMesh.gfx.size()) + " commands");
 +}
 +
-+// Draw the cabin (and its door) in Termina Field
-+static void DrawSmithyCabin(PlayState* play) {
++static void DrawHouse(PlayState* play) {
 +    OPEN_DISPS(play->state.gfxCtx);
 +    func_800BCBF4(&gZeroVec3f, play);
 +    func_8012C268(&play->state);
-+    Matrix_Translate(SMITHY_DX, SMITHY_DY, SMITHY_DZ, MTXMODE_NEW);
++    Matrix_Translate(HOUSE_X, HOUSE_Y, HOUSE_Z, MTXMODE_NEW);
++    Matrix_RotateYS(HOUSE_YAW, MTXMODE_APPLY);
++    Matrix_Translate(-RANCH_HOUSE_CX, -RANCH_HOUSE_FLOOR, -RANCH_HOUSE_CZ, MTXMODE_APPLY);
 +    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+    for (auto& piece : sSmithyDLs) {
-+        Gfx* dl = PieceDL(piece);
-+        if (dl != nullptr) gSPDisplayList(POLY_OPA_DISP++, dl);
-+    }
-+    // the cabin's wooden door (the game's standard door), closed, facing west - only if it's in the data
-+    static int sDoorExists = -1;
-+    if (sDoorExists < 0) sDoorExists = ResourceMgr_FileExists(gDoorLeftDL) ? 1 : 0;
-+    if (sDoorExists) {
-+        Gfx_SetupDL25_Opa(play->state.gfxCtx);
-+        gSPClearGeometryMode(POLY_OPA_DISP++, G_CULL_BACK);
-+        Matrix_Translate(DOOR_X, DOOR_Y, DOOR_Z, MTXMODE_NEW);
-+        Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
-+        Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
-+        Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
-+        Matrix_Translate(-3000.0f, 0.0f, 0.0f, MTXMODE_APPLY);
-+        MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+        gSPDisplayList(POLY_OPA_DISP++, (Gfx*)gDoorLeftDL);
-+    }
++    gSPDisplayList(POLY_OPA_DISP++, sHouseMesh.gfx.data());
 +    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
-+// Find the nearest wall around the spawn point inside your home, to hang the masks on
-+static void FindMaskWall(PlayState* play, Vec3f from) {
-+    sMaskWallFound = false;
-+    f32 best = 1e9f;
-+    from.y += 70.0f;
-+    for (s32 i = 0; i < 8; i++) {
-+        s16 yaw = (s16)(i * 0x2000);
-+        Vec3f to = { from.x + Math_SinS(yaw) * 700.0f, from.y, from.z + Math_CosS(yaw) * 700.0f };
-+        Vec3f hit;
-+        CollisionPoly* poly;
-+        s32 bgId;
-+        if (BgCheck_EntityLineTest1(&play->colCtx, &from, &to, &hit, &poly, true, false, false, true, &bgId)) {
-+            f32 d = Math_Vec3f_DistXZ(&from, &hit);
-+            if (d > 80.0f && d < best) {
-+                best = d;
-+                // hang it just off the wall, facing back into the room
-+                sMaskWallPos = { hit.x - Math_SinS(yaw) * 4.0f, from.y + 30.0f, hit.z - Math_CosS(yaw) * 4.0f };
-+                sMaskWallYaw = (s16)(yaw + 0x8000);
-+                sMaskWallFound = true;
-+            }
++// Only one bed upstairs: the second bed is hidden while you're home (the real ranch is unchanged)
++static void HideSecondBed(bool hide) {
++    if (hide == sBedHidden) return;
++    if (sSecondBedPath.empty()) {
++        sSecondBedPath = FindRoomDL("Z2_OMOYA", 2, 0x0027D8);
++        sSecondBedXluPath = FindRoomDL("Z2_OMOYA", 2, 0x009038);
++    }
++    sBedHidden = hide;
++    for (auto* p : { &sSecondBedPath, &sSecondBedXluPath }) {
++        if (p->empty() || LoadTyped(*p, Fast::ResourceType::DisplayList) == nullptr) continue;
++        if (hide) {
++            ResourceMgr_PatchGfxByName(p->c_str(), "mmOneBed", 0, gsSPEndDisplayList());
++        } else {
++            ResourceMgr_UnpatchGfxByName(p->c_str(), "mmOneBed");
 +        }
 +    }
 +}
@@ -7515,39 +7625,24 @@ index 0000000..a81d440
 +    if (sMaskVtxBuilt) return;
 +    sMaskVtxBuilt = true;
 +    for (int i = 0; i < 24; i++) {
-+        int col = i % 8, row = i / 8;
-+        f32 x0 = -140.0f + col * 36.0f, y0 = 50.0f - row * 36.0f; // 8 x 3 grid, facing +Z
-+        sMaskVtx[i][0] = (Vtx)VTX((s16)x0, (s16)(y0 - 30), 0, 0, 32 << 5, 255, 255, 255, 255);
-+        sMaskVtx[i][1] = (Vtx)VTX((s16)(x0 + 30), (s16)(y0 - 30), 0, 32 << 5, 32 << 5, 255, 255, 255, 255);
-+        sMaskVtx[i][2] = (Vtx)VTX((s16)(x0 + 30), (s16)y0, 0, 32 << 5, 0, 255, 255, 255, 255);
++        int col = i % 6, row = i / 6;
++        f32 x0 = -96.0f + col * 32.0f, y0 = 64.0f - row * 32.0f; // 6 x 4 grid, 192 x 128, facing +Z
++        sMaskVtx[i][0] = (Vtx)VTX((s16)x0, (s16)(y0 - 28), 0, 0, 32 << 5, 255, 255, 255, 255);
++        sMaskVtx[i][1] = (Vtx)VTX((s16)(x0 + 28), (s16)(y0 - 28), 0, 32 << 5, 32 << 5, 255, 255, 255, 255);
++        sMaskVtx[i][2] = (Vtx)VTX((s16)(x0 + 28), (s16)y0, 0, 32 << 5, 0, 255, 255, 255, 255);
 +        sMaskVtx[i][3] = (Vtx)VTX((s16)x0, (s16)y0, 0, 0, 0, 255, 255, 255, 255);
 +    }
 +}
 +
-+static void DrawHomeFurniture(PlayState* play) {
-+    OPEN_DISPS(play->state.gfxCtx);
-+    func_800BCBF4(&gZeroVec3f, play);
-+    func_8012C268(&play->state);
-+    Matrix_Translate(INN_DX, INN_DY, INN_DZ, MTXMODE_NEW);
-+    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+    for (auto& piece : sInnFurniture) {
-+        Gfx* dl = PieceDL(piece);
-+        if (dl != nullptr) gSPDisplayList(POLY_OPA_DISP++, dl);
-+    }
-+    CLOSE_DISPS(play->state.gfxCtx);
-+}
-+
-+// Outside: the cabin. Inside your home: furniture, and the masks on the wall (the game's own pictures).
++// Outside: the house. Inside your home: the masks on the bedroom wall (the game's own mask pictures).
 +static void DrawWorldExtras() {
 +    PlayState* play = gPlayState;
 +    if (play == nullptr) return;
 +    if (HouseHere(play)) {
-+        DrawSmithyCabin(play);
++        DrawHouse(play);
 +        return;
 +    }
-+    if (!sAtHome || play->sceneId != SCENE_KAJIYA) return;
-+    DrawHomeFurniture(play);
-+    if (!sMaskWallFound) return;
++    if (!sAtHome || !sMaskWallFound || play->sceneId != SCENE_OMOYA) return;
 +    BuildMaskVtx();
 +    OPEN_DISPS(play->state.gfxCtx);
 +    Gfx_SetupDL25_Opa(play->state.gfxCtx);
@@ -7570,7 +7665,7 @@ index 0000000..a81d440
 +    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
-+// Leave home (or rest): put Link back somewhere exact, via the game's own "respawn here" mechanism
++// Put Link somewhere exact, via the game's own "respawn here" mechanism
 +static void TransitionTo(PlayState* play, u16 entrance, Vec3f pos, s16 yaw, s32 room) {
 +    RespawnData* r = &gSaveContext.respawn[RESPAWN_MODE_DOWN];
 +    memset(r, 0, sizeof(*r));
@@ -7586,22 +7681,33 @@ index 0000000..a81d440
 +    play->transitionType = TRANS_TYPE_FADE_BLACK;
 +}
 +
++static void PushOutOfHouse(Vec3f* p) {
++    if (p->y > HOUSE_Y + 450.0f) return;
++    f32 x0 = HOUSE_X - HOUSE_HALF_X - 12, x1 = HOUSE_X + HOUSE_HALF_X + 12;
++    f32 z0 = HOUSE_Z - HOUSE_HALF_Z - 12, z1 = HOUSE_Z + HOUSE_HALF_Z + 12;
++    if (p->x <= x0 || p->x >= x1 || p->z <= z0 || p->z >= z1) return;
++    f32 dl = p->x - x0, dr = x1 - p->x, db = p->z - z0, df = z1 - p->z;
++    f32 m = MIN(MIN(dl, dr), MIN(db, df));
++    if (m == dl) p->x = x0;
++    else if (m == dr) p->x = x1;
++    else if (m == db) p->z = z0;
++    else p->z = z1;
++}
++
 +static void UpdateHouse(PlayState* play) {
 +    Player* player = GET_PLAYER(play);
 +    if (play->sceneId != sHouseSceneSeen) {
 +        sHouseSceneSeen = play->sceneId;
-+        sFencesSpawned = false;
-+        sEponaPenned = false;
-+        sObjFence = -1;
 +        sDoorCooldownFrame = play->gameplayFrames + 30; // don't walk straight back in on arrival
-+        if (play->sceneId == SCENE_KAJIYA && sGoingHome) {
++        if (play->sceneId == SCENE_OMOYA && sGoingHome) {
 +            sAtHome = true;
 +            sGoingHome = false;
 +            sMaskWallFound = false;
-+        } else if (play->sceneId != SCENE_KAJIYA) {
++        } else if (play->sceneId != SCENE_OMOYA) {
 +            sAtHome = false;
 +        }
-+        if (!sAtHome) HideSmithyGear(false); // the real smithy looks normal again
++        if (!sAtHome) HideSecondBed(false); // the real ranch house is unchanged
++        if (play->sceneId == SCENE_00KEIKOKU && sHouse.valid) TryBuildHouse();
 +    }
 +
 +    int req = sHousePlaceReq.exchange(0);
@@ -7614,51 +7720,36 @@ index 0000000..a81d440
 +    sNearDoor = 0;
 +    if (player == nullptr) return;
 +
-+    // ---- inside your home (the smithy's interior, with nobody in it)
-+    if (sAtHome && play->sceneId == SCENE_KAJIYA) {
++    // ---- inside your home
++    if (sAtHome && play->sceneId == SCENE_OMOYA) {
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_NPC].first; a != nullptr; a = a->next) Actor_Kill(a);
++        HideSecondBed(true);
 +        if (!sMaskWallFound) {
-+            // on the back wall, opposite the door, facing into the room
-+            sMaskWallPos = { 0.0f, 120.0f, -203.0f };
-+            sMaskWallYaw = 0;
++            // bedroom, south wall beside the door, facing into the room
++            sMaskWallPos = { 1060.0f, 330.0f, 197.0f };
++            sMaskWallYaw = (s16)0x8000;
 +            sMaskWallFound = true;
 +        }
-+        HideSmithyGear(true);
-+        // the smithy's props (and the forge's fire) aren't part of a home
-+        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_PROP].first; a != nullptr; a = a->next) Actor_Kill(a);
-+        // furniture is solid
-+        for (auto& f : sHomeFurniture) {
-+            Vec3f* p = &player->actor.world.pos;
-+            if (p->x > f.x0 - 15 && p->x < f.x1 + 15 && p->z > f.z0 - 15 && p->z < f.z1 + 15) {
-+                f32 dl = p->x - (f.x0 - 15), dr = (f.x1 + 15) - p->x, db = p->z - (f.z0 - 15), df = (f.z1 + 15) - p->z;
-+                f32 m = MIN(MIN(dl, dr), MIN(db, df));
-+                if (m == dl) p->x = f.x0 - 15;
-+                else if (m == dr) p->x = f.x1 + 15;
-+                else if (m == db) p->z = f.z0 - 15;
-+                else p->z = f.z1 + 15;
-+            }
-+        }
-+        // Rest by either bed
-+        Vec3f bedL = { -105.0f, -15.0f, 94.0f }, bedR = { 105.0f, -15.0f, 94.0f };
-+        sNearDoor = !Play_InCsMode(play) && ((Math_Vec3f_DistXZ(&player->actor.world.pos, &bedL) < 130.0f) ||
-+                                              (Math_Vec3f_DistXZ(&player->actor.world.pos, &bedR) < 130.0f));
-+        // going out the door leads back to your own front door in Termina Field
++        Vec3f bed = { 865.0f, 260.0f, -112.0f };
++        sNearDoor = !Play_InCsMode(play) && (Math_Vec3f_DistXZ(&player->actor.world.pos, &bed) < 150.0f) &&
++                    (fabsf(player->actor.world.pos.y - bed.y) < 60.0f);
++        // any way out of the house leads back to your front door in Termina Field
 +        if (play->transitionTrigger == TRANS_TRIGGER_START && play->nextEntrance != HOME_ENTRANCE && !sRestPending &&
 +            sHouse.valid) {
-+            Vec3f out = { DOOR_X - 110.0f, DOOR_Y, DOOR_Z };
++            Vec3f out = { HOUSE_DOOR_X - 90.0f, HOUSE_Y, HOUSE_DOOR_Z };
 +            sAtHome = false;
 +            TransitionTo(play, ENTRANCE(TERMINA_FIELD, 0), out, (s16)-0x4000, 0);
 +        }
 +    }
 +
-+    // ---- outside: solid walls; walking into the doorway takes you in; Epona waits in her paddock
++    // ---- outside: solid walls; walking into the door takes you in
 +    if (HouseHere(play)) {
-+        SpawnPaddock(play);
-+        PushOutOfWalls(&player->actor.world.pos);
-+        if (player->rideActor != nullptr) PushOutOfWalls(&player->rideActor->world.pos);
-+        bool inDoorway = (player->actor.world.pos.x > DOOR_X - 45.0f) && (fabsf(player->actor.world.pos.z - DOOR_Z) < 30.0f) &&
-+                         (fabsf(player->actor.world.pos.y - DOOR_Y) < 60.0f);
-+        if (inDoorway && player->rideActor == nullptr && !Play_InCsMode(play) &&
++        PushOutOfHouse(&player->actor.world.pos);
++        if (player->rideActor != nullptr) PushOutOfHouse(&player->rideActor->world.pos);
++        bool atDoor = (fabsf(player->actor.world.pos.x - (HOUSE_X - HOUSE_HALF_X - 12)) < 20.0f) &&
++                      (fabsf(player->actor.world.pos.z - HOUSE_DOOR_Z) < 35.0f) &&
++                      (fabsf(player->actor.world.pos.y - HOUSE_Y) < 60.0f);
++        if (atDoor && player->rideActor == nullptr && !Play_InCsMode(play) &&
 +            play->transitionTrigger == TRANS_TRIGGER_OFF && play->gameplayFrames > sDoorCooldownFrame) {
 +            sGoingHome = true;
 +            play->nextEntrance = HOME_ENTRANCE;
@@ -7669,18 +7760,10 @@ index 0000000..a81d440
 +            Audio_PlaySfx(NA_SE_OC_DOOR_OPEN);
 +            return;
 +        }
-+        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_BG].first; a != nullptr; a = a->next) {
-+            if (a->id != ACTOR_EN_HORSE || a == player->rideActor || sEponaPenned || play->gameplayFrames < 10) continue;
-+            Vec3f pen = { -2280.0f, -198.0f, 3760.0f };
-+            a->world.pos = pen;
-+            a->home.pos = pen;
-+            a->prevPos = pen;
-+            sEponaPenned = true;
-+        }
 +    }
 +    sEnterReq = 0;
 +
-+    // ---- resting (only at home)
++    // ---- resting (by your bed)
 +    int hours = sRestReq.exchange(-1);
 +    if (hours > 0 && sAtHome && sNearDoor) {
 +        s32 day = gSaveContext.save.day;
@@ -7692,8 +7775,8 @@ index 0000000..a81d440
 +        s32 inDay = total % (24 * 60);
 +        sRestTime = (u16)(CLOCK_TIME(6, 0) + (u16)(inDay * 0x10000 / (24 * 60)));
 +        sRestPending = true;
-+        gSaveContext.seqId = NA_BGM_DISABLED; // music for the new time of day
-+        sGoingHome = true;                    // wake up at home, where you lay down
++        gSaveContext.seqId = NA_BGM_DISABLED;
++        sGoingHome = true; // wake up at home, by the bed
 +        TransitionTo(play, HOME_ENTRANCE, player->actor.world.pos, player->actor.shape.rot.y, play->roomCtx.curRoom.num);
 +        play->transitionType = TRANS_TYPE_FADE_BLACK_SLOW;
 +        Audio_PlaySfx(NA_SE_SY_DECIDE);
