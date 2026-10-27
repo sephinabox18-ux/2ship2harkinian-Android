@@ -6013,10 +6013,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..04214ab
+index 0000000..b8d1796
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2322 @@
+@@ -0,0 +1,2358 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7274,6 +7274,9 @@ index 0000000..04214ab
 +#include "ship/resource/ResourceManager.h"
 +#include "ship/resource/archive/ArchiveManager.h"
 +#include "fast/resource/type/Vertex.h"
++#include "fast/lus_gbi.h"
++#include "2s2h/resource/type/Array.h"
++#include "2s2h/resource/type/2shResourceType.h"
 +extern "C" uint8_t ResourceMgr_FileExists(const char* resName);
 +extern "C" void ResourceMgr_PatchGfxByName(const char* path, const char* patchName, int index, Gfx instruction);
 +extern "C" void ResourceMgr_UnpatchGfxByName(const char* path, const char* patchName);
@@ -7295,6 +7298,33 @@ index 0000000..04214ab
 +    if (ResourceMgr_FileExists(a)) return a;
 +    if (ResourceMgr_FileExists(b)) return b;
 +    return "";
++}
++
++// Vertex data: in this game's archive it's stored as an "array of vertices" resource (some builds use a
++// plain vertex resource). Returns the vertices and how many there are, or nullptr.
++static const Vtx* LoadVerts(const std::string& path, size_t* count, std::vector<std::shared_ptr<Ship::IResource>>& keep) {
++    *count = 0;
++    if (path.empty()) return nullptr;
++    std::string clean = (path.rfind("__OTR__", 0) == 0) ? path.substr(7) : path;
++    if (!ResourceMgr_FileExists(clean.c_str())) return nullptr;
++    auto res = Ship::Context::GetRawInstance()->GetResourceManager()->LoadResource(clean);
++    if (res == nullptr || res->GetInitData() == nullptr) return nullptr;
++    uint32_t type = res->GetInitData()->Type;
++    if (type == (uint32_t)SOH::ResourceType::SOH_Array) {
++        auto arr = std::static_pointer_cast<SOH::Array>(res);
++        if (arr->ArrayType != SOH::ArrayResourceType::Vertex || arr->Vertices.empty()) return nullptr;
++        static_assert(sizeof(Fast::F3DVtx) == sizeof(Vtx), "vertex layouts differ");
++        keep.push_back(res);
++        *count = arr->Vertices.size();
++        return (const Vtx*)arr->Vertices.data();
++    }
++    if (type == (uint32_t)Fast::ResourceType::Vertex) {
++        auto v = std::static_pointer_cast<Fast::Vertex>(res);
++        keep.push_back(res);
++        *count = v->VertexList.size();
++        return v->VertexList.data();
++    }
++    return nullptr;
 +}
 +
 +static std::string HashToPath(uint64_t hash) {
@@ -7354,21 +7384,21 @@ index 0000000..04214ab
 +                    return false;
 +                }
 +                std::string vpath = HashToPath(hash);
-+                auto res = LoadTyped(vpath, Fast::ResourceType::Vertex);
-+                if (res == nullptr) {
++                size_t vcount = 0;
++                const Vtx* vsrc = LoadVerts(vpath, &vcount, out.keep);
++                if (vsrc == nullptr) {
 +                    sCopyError = "vertices not found: " + (vpath.empty() ? std::string("(unknown hash)") : vpath);
 +                    return false;
 +                }
-+                auto vres = std::static_pointer_cast<Fast::Vertex>(res);
 +                size_t first = off / sizeof(Vtx);
-+                if (off % sizeof(Vtx) != 0 || first + n > vres->VertexList.size()) {
++                if (off % sizeof(Vtx) != 0 || first + n > vcount) {
 +                    sCopyError = "vertex range";
 +                    return false;
 +                }
 +                std::unique_ptr<Vtx[]> block(new Vtx[n]);
 +                u32 v0 = end - n;
 +                for (u32 k = 0; k < n; k++) {
-+                    block[k] = vres->VertexList[first + k];
++                    block[k] = vsrc[first + k];
 +                    for (int c = 0; c < 3; c++) block[k].v.cn[c] = (u8)((block[k].v.cn[c] * f.tint[c]) / 255);
 +                    slots[v0 + k] = &block[k];
 +                    slotIn[v0 + k] = f.Inside(block[k]);
@@ -7386,13 +7416,19 @@ index 0000000..04214ab
 +                Gfx h = ins[++i];
 +                u32 n = (u32)h.words.w0, v0 = (u32)(h.words.w1 >> 16), first = (u32)(h.words.w1 & 0xFFFF);
 +                if (name == nullptr || n == 0 || v0 + n > 64) return false;
-+                auto res = LoadTyped(name, Fast::ResourceType::Vertex);
-+                if (res == nullptr) return false;
-+                auto vres = std::static_pointer_cast<Fast::Vertex>(res);
-+                if (first + n > vres->VertexList.size()) return false;
++                size_t vcount = 0;
++                const Vtx* vsrc = LoadVerts(name, &vcount, out.keep);
++                if (vsrc == nullptr) {
++                    sCopyError = std::string("vertices not found: ") + name;
++                    return false;
++                }
++                if (first + n > vcount) {
++                    sCopyError = "vertex range";
++                    return false;
++                }
 +                std::unique_ptr<Vtx[]> block(new Vtx[n]);
 +                for (u32 k = 0; k < n; k++) {
-+                    block[k] = vres->VertexList[first + k];
++                    block[k] = vsrc[first + k];
 +                    for (int c = 0; c < 3; c++) block[k].v.cn[c] = (u8)((block[k].v.cn[c] * f.tint[c]) / 255);
 +                    slots[v0 + k] = &block[k];
 +                    slotIn[v0 + k] = f.Inside(block[k]);
