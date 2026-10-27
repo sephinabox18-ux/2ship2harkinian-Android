@@ -987,10 +987,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..475a1ea
+index 0000000..ba8e35b
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2809 @@
+@@ -0,0 +1,2833 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1035,11 +1035,11 @@ index 0000000..475a1ea
 +    // Native state bits
 +    static final int ST_CAN_SKIP = 1, ST_OCARINA = 2, ST_SHOW_QUEST = 4, ST_SPRINT = 8, ST_TRAIL = 16, ST_SKIPPING = 32,
 +            ST_PAUSED = 64, ST_PAUSE_GRID = 128, ST_GAMEPLAY = 256, ST_AIMING = 512, ST_TEXT = 1024, ST_SWIMMING = 2048,
-+            ST_AT_HOUSE = 4096, ST_AT_HOME = 8192;
++            ST_AT_HOUSE = 4096, ST_AT_HOME = 8192, ST_NEAR_THING = 16384;
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
 +            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10, KIND_DPAD = 11,
-+            KIND_REST = 12;
++            KIND_REST = 12, KIND_HOME = 13;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -1294,6 +1294,9 @@ index 0000000..475a1ea
 +        ctls.add(new Ctl("horse", "Epona", "", KIND_ACTION, ACT_HORSE, STYLE_PLAIN, 0.560f, 0.200f, 50));
 +        restCtl = new Ctl("rest", "Rest", "", KIND_REST, 0, STYLE_PLAIN, 0.500f, 0.720f, 64);
 +        ctls.add(restCtl);
++        // at home: hang things on the wall / put clutter away
++        ctls.add(new Ctl("display", "Display", "", KIND_HOME, 1, STYLE_PLAIN, 0.420f, 0.720f, 58));
++        ctls.add(new Ctl("putaway", "Put away", "", KIND_HOME, 2, STYLE_PLAIN, 0.580f, 0.720f, 58));
 +        dpadCtl = new Ctl("dpad", "", "", KIND_DPAD, 0, STYLE_PLAIN, 0.320f, 0.300f, 110);
 +        ctls.add(dpadCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
@@ -1493,9 +1496,11 @@ index 0000000..475a1ea
 +            checkLatches();
 +            boolean atHouse = (stateBits & ST_AT_HOUSE) != 0;
 +            boolean atHome = (stateBits & ST_AT_HOME) != 0;
-+            if (atHouse != lastAtHouse || atHome != lastAtHome) {
++            boolean nearThing = (stateBits & ST_NEAR_THING) != 0;
++            if (atHouse != lastAtHouse || atHome != lastAtHome || nearThing != lastNearThing) {
 +                lastAtHouse = atHouse;
 +                lastAtHome = atHome;
++                lastNearThing = nearThing;
 +                if (restCtl.iconView instanceof Ornate.IconView) {
 +                    ((Ornate.IconView) restCtl.iconView).setIcon(atHome ? Ornate.ICON_MOON : Ornate.ICON_DOOR);
 +                }
@@ -1624,6 +1629,8 @@ index 0000000..475a1ea
 +            case "wheel": return Ornate.ICON_PLUS;
 +            case "horse": return Ornate.ICON_HORSE;
 +            case "rest": return Ornate.ICON_MOON;
++            case "display": return Ornate.ICON_FRAME;
++            case "putaway": return Ornate.ICON_BOX;
 +            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
@@ -1859,8 +1866,13 @@ index 0000000..475a1ea
 +    }
 +
 +    private void openWheel() {
++        openWheel(false);
++    }
++
++    private void openWheel(boolean display) {
 +        if ((stateBits & ST_GAMEPLAY) == 0) return;
 +        releaseAll();
++        wheel.setDisplayMode(display);
 +        wheel.refresh();
 +        wheel.setVisibility(View.VISIBLE);
 +        wheel.bringToFront();
@@ -1953,7 +1965,7 @@ index 0000000..475a1ea
 +    }
 +
 +    private int lastAction = -99;
-+    private boolean lastAtHouse = false, lastAtHome = false;
++    private boolean lastAtHouse = false, lastAtHome = false, lastNearThing = false;
 +
 +    // ---------------------------------------------------------------- resting at your house
 +    private void buildRestPanel() {
@@ -3143,6 +3155,13 @@ index 0000000..475a1ea
 +                if (editing) c.view.setAlpha(1f);
 +                continue;
 +            }
++            if (c.kind == KIND_HOME) {
++                boolean show = editing || (!c.hidden && (stateBits & ST_AT_HOME) != 0
++                        && (c.value == 1 || (stateBits & ST_NEAR_THING) != 0));
++                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
++                continue;
++            }
 +            if (c.kind == KIND_REST) {
 +                boolean show = editing || (!c.hidden && (stateBits & ST_AT_HOUSE) != 0);
 +                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
@@ -3338,6 +3357,10 @@ index 0000000..475a1ea
 +                c.latchedPress = false;
 +                switch (c.kind) {
 +                    case KIND_WHEEL: openWheel(); break;
++                    case KIND_HOME:
++                        if (c.value == 1) openWheel(true);
++                        else act.nativeMmSetOption(15, 1);
++                        break;
 +                    case KIND_REST:
 +                        if ((stateBits & ST_AT_HOME) != 0) showRest(true);   // inside: rest
 +                        else act.nativeMmSetOption(14, 1);                     // at the door: go in
@@ -3489,7 +3512,8 @@ index 0000000..475a1ea
 +            case KIND_WHEEL: return "item wheel";
 +            case KIND_MAPVIEW: return "mini-map";
 +            case KIND_DPAD: return "D-pad shortcuts";
-+            case KIND_REST: return "Enter house / Rest (shows at your house)";
++            case KIND_REST: return "Rest (by your bed)";
++            case KIND_HOME: return c.value == 1 ? "Display (at home)" : "Put away (at home)";
 +            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
@@ -3802,10 +3826,10 @@ index 0000000..475a1ea
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..57afb92
+index 0000000..95cca0a
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,712 @@
+@@ -0,0 +1,741 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -4148,7 +4172,7 @@ index 0000000..57afb92
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
 +            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16,
-+            ICON_HORSE = 17, ICON_MOON = 18, ICON_DOOR = 19;
++            ICON_HORSE = 17, ICON_MOON = 18, ICON_DOOR = 19, ICON_FRAME = 20, ICON_BOX = 21;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -4209,6 +4233,8 @@ index 0000000..57afb92
 +                case ICON_HORSE: horse(c, s); break;
 +                case ICON_MOON: moon(c, s); break;
 +                case ICON_DOOR: door(c, s); break;
++                case ICON_FRAME: frame(c, s); break;
++                case ICON_BOX: box(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -4339,6 +4365,33 @@ index 0000000..57afb92
 +            p.moveTo(s * 0.32f, s * 0.5f);
 +            p.lineTo(s * 0.68f, s * 0.5f);
 +            c.drawPath(p, stroke);
++        }
++
++        // Display: a picture frame with a hook
++        private void frame(Canvas c, float s) {
++            stroke.setStrokeWidth(s * 0.07f);
++            c.drawRect(s * 0.24f, s * 0.3f, s * 0.76f, s * 0.78f, stroke);
++            p.reset();
++            p.moveTo(s * 0.34f, s * 0.3f);
++            p.lineTo(s * 0.5f, s * 0.14f);
++            p.lineTo(s * 0.66f, s * 0.3f);
++            c.drawPath(p, stroke);
++            c.drawCircle(s * 0.5f, s * 0.54f, s * 0.09f, fill);
++        }
++
++        // Put away: a box with its lid
++        private void box(Canvas c, float s) {
++            c.drawRect(s * 0.24f, s * 0.42f, s * 0.76f, s * 0.8f, fill);
++            stroke.setStrokeWidth(s * 0.07f);
++            p.reset();
++            p.moveTo(s * 0.2f, s * 0.36f);
++            p.lineTo(s * 0.8f, s * 0.36f);
++            c.drawPath(p, stroke);
++            accent.setStrokeWidth(s * 0.04f);
++            p.reset();
++            p.moveTo(s * 0.42f, s * 0.56f);
++            p.lineTo(s * 0.58f, s * 0.56f);
++            c.drawPath(p, accent);
 +        }
 +
 +        // Enter: an arched door with a knob
@@ -4520,10 +4573,10 @@ index 0000000..57afb92
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
 new file mode 100644
-index 0000000..845972a
+index 0000000..5ff929b
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/WheelView.java
-@@ -0,0 +1,281 @@
+@@ -0,0 +1,302 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -4569,6 +4622,13 @@ index 0000000..845972a
 +    private final RectF rf = new RectF();
 +
 +    private boolean masks = false;
++    private boolean displayMode = false; // at home: tap an item to hang it on the wall you're facing
++
++    public void setDisplayMode(boolean on) {
++        displayMode = on;
++        masks = on; // masks first: they're what you'll most want to hang
++        selected = -1;
++    }
 +    private final List<Integer> slots = new ArrayList<>(); // inventory slot indices shown on the ring
 +    private int selected = -1;                             // index into slots
 +    private int[] inv = new int[48];
@@ -4696,6 +4756,12 @@ index 0000000..845972a
 +        String label = selected >= 0 && selected < n ? host.name(inv[slots.get(selected)]) : "Tap an item";
 +        c.drawText(label, cx, cy - innerR * 0.15f, text);
 +
++        if (displayMode) {
++            small.setTextSize(dp(12));
++            c.drawText("Tap something to hang it on the wall", cx, cy + innerR * 0.25f, small);
++            c.drawText("you're facing", cx, cy + innerR * 0.25f + dp(16), small);
++            return;
++        }
 +        // The three C buttons to put it on
 +        cBtnR = Math.min(dp(24), innerR * 0.26f);
 +        cBtnY = cy + innerR * 0.22f;
@@ -4752,6 +4818,14 @@ index 0000000..845972a
 +            return true;
 +        }
 +        if (action != MotionEvent.ACTION_UP) return true;
++        if (displayMode) {
++            int hit = hitSlot(x, y);
++            if (hit >= 0) {
++                host.equip(7, slots.get(hit)); // 7 = hang on the wall
++                host.close();
++                return true;
++            }
++        }
 +
 +        if (dist(x, y, closeX, closeY) < dp(24)) {
 +            host.close();
@@ -6013,10 +6087,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..b8d1796
+index 0000000..209b7e9
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2358 @@
+@@ -0,0 +1,2526 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -6088,6 +6162,7 @@ index 0000000..b8d1796
 +    ST_SWIMMING = 1 << 11, // in the water (Zora special = fast swim + barrier together)
 +    ST_AT_HOUSE = 1 << 12, // at your house's door (Enter) or inside your home (Rest)
 +    ST_AT_HOME = 1 << 13,  // inside your home
++    ST_NEAR_THING = 1 << 14, // by something in your home you can put away
 +};
 +
 +// ---------------------------------------------------------------- item icons + C buttons + touch pause grid
@@ -7571,6 +7646,8 @@ index 0000000..b8d1796
 +static s32 sHouseSceneSeen = -1;
 +static u32 sDoorCooldownFrame = 0;
 +static CopiedMesh sHouseMesh;
++static CopiedMesh sDoorMesh;   // the game's standard wooden door
++static bool sDoorTried = false;
 +static bool sHouseTried = false;
 +static Vec3f sMaskWallPos;
 +static s16 sMaskWallYaw = 0;
@@ -7649,10 +7726,25 @@ index 0000000..b8d1796
 +        return;
 +    }
 +    Crumb("house: built, " + std::to_string(sHouseMesh.gfx.size()) + " commands");
-+    // one-time note so we know the copy worked (if the house still isn't visible, it's placement, not data)
-+    char msg[96];
-+    snprintf(msg, sizeof(msg), "House ready (%d parts)", (int)sHouseMesh.gfx.size());
-+    PostMessage(msg);
++
++}
++
++static void TryBuildDoor() {
++    if (sDoorTried) return;
++    sDoorTried = true;
++    CopyFilter all;
++    all.cx = 0;
++    all.cz = 0;
++    all.cosA = 1;
++    all.sinA = 0;
++    all.halfX = all.halfZ = 100000.0f;
++    all.yMin = -100000.0f;
++    all.yMax = 100000.0f;
++    all.tint[0] = all.tint[1] = all.tint[2] = 255;
++    if (!BuildMesh({ std::string("objects/gameplay_keep/gDoorLeftDL") }, all, sDoorMesh)) {
++        sDoorMesh = CopiedMesh(); // no door model available: the doorway stays open (still works)
++        Crumb("door: " + sCopyError);
++    }
 +}
 +
 +static void DrawHouse(PlayState* play) {
@@ -7664,6 +7756,17 @@ index 0000000..b8d1796
 +    Matrix_Translate(-RANCH_HOUSE_CX, -RANCH_HOUSE_FLOOR, -RANCH_HOUSE_CZ, MTXMODE_APPLY);
 +    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
 +    gSPDisplayList(POLY_OPA_DISP++, sHouseMesh.gfx.data());
++    if (sDoorMesh.ok) {
++        // closed wooden door in the doorway, facing west (the door model stands on its edge, 60 wide x 100 tall)
++        Gfx_SetupDL25_Opa(play->state.gfxCtx);
++        Matrix_Translate(HOUSE_DOOR_X, HOUSE_Y, HOUSE_DOOR_Z, MTXMODE_NEW);
++        Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
++        Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
++        Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
++        Matrix_Translate(-2700.0f, 0.0f, 0.0f, MTXMODE_APPLY);
++        MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++        gSPDisplayList(POLY_OPA_DISP++, sDoorMesh.gfx.data());
++    }
 +    CLOSE_DISPS(play->state.gfxCtx);
 +}
 +
@@ -7685,20 +7788,150 @@ index 0000000..b8d1796
 +    }
 +}
 +
-+static Vtx sMaskVtx[24][4];
-+static bool sMaskVtxBuilt = false;
++// ---- decorating your home
++// "Put away": some of the ranch's clutter (milk cans, little odds and ends) can be tidied away.
++// "Display": hang any item or mask you own on the wall you're facing. Both are saved.
++struct Clutter {
++    int room, offset;   // the piece of the house's mesh
++    f32 x, y, z;        // where to stand near it
++    std::string path;
++};
++static Clutter sClutter[] = {
++    { 2, 0x005A00, 1163, 260, 24 },  // milk cans, bedroom
++    { 2, 0x006978, 990, 260, -140 }, // little things on the shelves, bedroom
++    { 1, 0x004C60, 1095, 0, -164 },  // milk cans, downstairs
++};
++#define CLUTTER_COUNT (s32)(sizeof(sClutter) / sizeof(sClutter[0]))
++struct Hung {
++    u8 item;
++    s16 x, y, z, yaw;
++};
++struct HomeData {
++    u32 magic;
++    u8 tidied[8];
++    u8 count;
++    Hung hung[48];
++};
++static HomeData sHome = { 0x484F4D31 };
++static bool sHomeLoaded = false;
++static bool sClutterHidden[8] = {};
++static std::atomic<int> sNearThing{ 0 };      // standing by something you can put away
++static std::atomic<int> sPutAwayReq{ 0 };
++static std::atomic<int> sDisplayReq{ -1 };     // inventory slot to hang up
 +
-+static void BuildMaskVtx() {
-+    if (sMaskVtxBuilt) return;
-+    sMaskVtxBuilt = true;
-+    for (int i = 0; i < 24; i++) {
-+        int col = i % 6, row = i / 6;
-+        f32 x0 = -96.0f + col * 32.0f, y0 = 64.0f - row * 32.0f; // 6 x 4 grid, 192 x 128, facing +Z
-+        sMaskVtx[i][0] = (Vtx)VTX((s16)x0, (s16)(y0 - 28), 0, 0, 32 << 5, 255, 255, 255, 255);
-+        sMaskVtx[i][1] = (Vtx)VTX((s16)(x0 + 28), (s16)(y0 - 28), 0, 32 << 5, 32 << 5, 255, 255, 255, 255);
-+        sMaskVtx[i][2] = (Vtx)VTX((s16)(x0 + 28), (s16)y0, 0, 32 << 5, 0, 255, 255, 255, 255);
-+        sMaskVtx[i][3] = (Vtx)VTX((s16)x0, (s16)y0, 0, 0, 0, 255, 255, 255, 255);
++static std::string HomePath() {
++    return Ship::Context::GetPathRelativeToAppDirectory("mm_home.bin");
++}
++
++static void LoadHome() {
++    if (sHomeLoaded) return;
++    sHomeLoaded = true;
++    std::ifstream f(HomePath(), std::ios::binary);
++    HomeData h = {};
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x484F4D31 && h.count <= 48) sHome = h;
++}
++
++static void SaveHome() {
++    std::ofstream f(HomePath(), std::ios::binary | std::ios::trunc);
++    if (f) f.write((const char*)&sHome, sizeof(sHome));
++}
++
++static void ShowClutter(bool atHome) {
++    for (s32 i = 0; i < CLUTTER_COUNT && i < 8; i++) {
++        bool hide = atHome && sHome.tidied[i];
++        if (hide == sClutterHidden[i]) continue;
++        if (sClutter[i].path.empty()) sClutter[i].path = FindRoomDL("Z2_OMOYA", sClutter[i].room, sClutter[i].offset);
++        if (sClutter[i].path.empty() || LoadTyped(sClutter[i].path, Fast::ResourceType::DisplayList) == nullptr) continue;
++        if (hide) {
++            ResourceMgr_PatchGfxByName(sClutter[i].path.c_str(), "mmTidy", 0, gsSPEndDisplayList());
++        } else {
++            ResourceMgr_UnpatchGfxByName(sClutter[i].path.c_str(), "mmTidy");
++        }
++        sClutterHidden[i] = hide;
 +    }
++}
++
++static void UpdateDecorating(PlayState* play, Player* player) {
++    LoadHome();
++    ShowClutter(true);
++    Vec3f* lp = &player->actor.world.pos;
++    // the nearest thing you could put away: clutter, or something you hung up
++    s32 nearClutter = -1, nearHung = -1;
++    f32 best = 90.0f;
++    for (s32 i = 0; i < CLUTTER_COUNT; i++) {
++        if (sHome.tidied[i]) continue;
++        Vec3f c = { sClutter[i].x, sClutter[i].y, sClutter[i].z };
++        f32 d = Math_Vec3f_DistXZ(lp, &c);
++        if (d < best && fabsf(lp->y - c.y) < 60.0f) {
++            best = d;
++            nearClutter = i;
++        }
++    }
++    for (s32 i = 0; i < sHome.count; i++) {
++        Vec3f c = { (f32)sHome.hung[i].x, (f32)sHome.hung[i].y, (f32)sHome.hung[i].z };
++        f32 d = Math_Vec3f_DistXZ(lp, &c);
++        if (d < best && fabsf(lp->y + 50.0f - c.y) < 90.0f) {
++            best = d;
++            nearHung = i;
++            nearClutter = -1;
++        }
++    }
++    sNearThing = (nearClutter >= 0 || nearHung >= 0) ? 1 : 0;
++    if (sPutAwayReq.exchange(0)) {
++        if (nearHung >= 0) {
++            sHome.hung[nearHung] = sHome.hung[--sHome.count];
++            PostMessage("Taken down");
++        } else if (nearClutter >= 0) {
++            sHome.tidied[nearClutter] = 1;
++            ShowClutter(true);
++            PostMessage("Put away");
++        }
++        SaveHome();
++        Audio_PlaySfx(NA_SE_SY_DECIDE);
++    }
++    int inv = sDisplayReq.exchange(-1);
++    if (inv >= 0 && inv < 48) {
++        u8 item = gSaveContext.save.saveInfo.inventory.items[inv];
++        if (item == ITEM_NONE || item >= 131) return;
++        if (sHome.count >= 48) {
++            PostMessage("The walls are full");
++            return;
++        }
++        // find the wall Link is facing
++        s16 yaw = player->actor.shape.rot.y;
++        Vec3f a = { lp->x, lp->y + 50.0f, lp->z };
++        Vec3f b = { a.x + Math_SinS(yaw) * 160.0f, a.y, a.z + Math_CosS(yaw) * 160.0f };
++        Vec3f hit;
++        CollisionPoly* poly;
++        s32 bgId;
++        if (!BgCheck_EntityLineTest1(&play->colCtx, &a, &b, &hit, &poly, true, false, false, true, &bgId)) {
++            PostMessage("Stand facing a wall to hang it");
++            return;
++        }
++        Hung h;
++        h.item = item;
++        h.x = (s16)(hit.x - Math_SinS(yaw) * 3.0f);
++        h.y = (s16)(lp->y + 70.0f);
++        h.z = (s16)(hit.z - Math_CosS(yaw) * 3.0f);
++        h.yaw = (s16)(yaw + 0x8000); // facing back into the room
++        sHome.hung[sHome.count++] = h;
++        SaveHome();
++        Audio_PlaySfx(NA_SE_SY_DECIDE);
++        PostMessage("Hung on the wall");
++    }
++}
++
++static Vtx sHungVtx[4];
++static bool sHungVtxBuilt = false;
++
++static void BuildHungVtx() {
++    if (sHungVtxBuilt) return;
++    sHungVtxBuilt = true;
++    // one 30 x 30 picture, centred, facing +Z
++    sHungVtx[0] = (Vtx)VTX(-15, -15, 0, 0, 32 << 5, 255, 255, 255, 255);
++    sHungVtx[1] = (Vtx)VTX(15, -15, 0, 32 << 5, 32 << 5, 255, 255, 255, 255);
++    sHungVtx[2] = (Vtx)VTX(15, 15, 0, 32 << 5, 0, 255, 255, 255, 255);
++    sHungVtx[3] = (Vtx)VTX(-15, 15, 0, 0, 0, 255, 255, 255, 255);
 +}
 +
 +// Outside: the house. Inside your home: the masks on the bedroom wall (the game's own mask pictures).
@@ -7709,24 +7942,25 @@ index 0000000..b8d1796
 +        DrawHouse(play);
 +        return;
 +    }
-+    if (!sAtHome || !sMaskWallFound || play->sceneId != SCENE_OMOYA) return;
-+    BuildMaskVtx();
++    if (!sAtHome || play->sceneId != SCENE_OMOYA || sHome.count == 0) return;
++    BuildHungVtx();
 +    OPEN_DISPS(play->state.gfxCtx);
 +    Gfx_SetupDL25_Opa(play->state.gfxCtx);
 +    gSPClearGeometryMode(POLY_OPA_DISP++, G_LIGHTING | G_CULL_BACK);
-+    gDPSetRenderMode(POLY_OPA_DISP++, G_RM_AA_ZB_TEX_EDGE, G_RM_AA_ZB_TEX_EDGE2);
-+    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_DECALRGBA, G_CC_DECALRGBA);
++    // two-cycle setup: colour and alpha from the picture itself, edges cut out cleanly
++    gDPSetCombineMode(POLY_OPA_DISP++, G_CC_DECALRGBA, G_CC_PASS2);
++    gDPSetRenderMode(POLY_OPA_DISP++, G_RM_PASS, G_RM_AA_ZB_TEX_EDGE2);
 +    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
-+    Matrix_Translate(sMaskWallPos.x, sMaskWallPos.y, sMaskWallPos.z, MTXMODE_NEW);
-+    Matrix_RotateYS(sMaskWallYaw, MTXMODE_APPLY);
-+    MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
-+    for (int i = 0; i < 24; i++) {
-+        u8 item = gSaveContext.save.saveInfo.inventory.items[ITEM_NUM_SLOTS + i];
-+        if (item == ITEM_NONE || item >= 131 || gItemIcons[item] == NULL) continue;
-+        gDPLoadTextureBlock(POLY_OPA_DISP++, gItemIcons[item], G_IM_FMT_RGBA, G_IM_SIZ_32b, 32, 32, 0,
++    for (s32 i = 0; i < sHome.count; i++) {
++        Hung& h = sHome.hung[i];
++        if (h.item >= 131 || gItemIcons[h.item] == NULL) continue;
++        Matrix_Translate(h.x, h.y, h.z, MTXMODE_NEW);
++        Matrix_RotateYS(h.yaw, MTXMODE_APPLY);
++        MATRIX_FINALIZE_AND_LOAD(POLY_OPA_DISP++, play->state.gfxCtx);
++        gDPLoadTextureBlock(POLY_OPA_DISP++, gItemIcons[h.item], G_IM_FMT_RGBA, G_IM_SIZ_32b, 32, 32, 0,
 +                            G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMIRROR | G_TX_CLAMP, G_TX_NOMASK, G_TX_NOMASK,
 +                            G_TX_NOLOD, G_TX_NOLOD);
-+        gSPVertex(POLY_OPA_DISP++, (uintptr_t)sMaskVtx[i], 4, 0);
++        gSPVertex(POLY_OPA_DISP++, (uintptr_t)sHungVtx, 4, 0);
 +        gSP2Triangles(POLY_OPA_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
 +    }
 +    CLOSE_DISPS(play->state.gfxCtx);
@@ -7773,25 +8007,27 @@ index 0000000..b8d1796
 +        } else if (play->sceneId != SCENE_OMOYA) {
 +            sAtHome = false;
 +        }
-+        if (!sAtHome) HideSecondBed(false); // the real ranch house is unchanged
-+        if (play->sceneId == SCENE_00KEIKOKU) TryBuildHouse(); // tries again on every visit until it works
++        if (!sAtHome) {
++            HideSecondBed(false); // the real ranch house is unchanged
++            ShowClutter(false);
++        }
++        if (play->sceneId == SCENE_00KEIKOKU) {
++            TryBuildHouse(); // tries again on every visit until it works
++            TryBuildDoor();
++        }
 +    }
 +
 +    sHousePlaceReq = 0; // (no on/off any more: the house is part of the world)
 +
 +    sNearDoor = 0;
++    sNearThing = 0;
 +    if (player == nullptr) return;
 +
 +    // ---- inside your home
 +    if (sAtHome && play->sceneId == SCENE_OMOYA) {
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_NPC].first; a != nullptr; a = a->next) Actor_Kill(a);
 +        HideSecondBed(true);
-+        if (!sMaskWallFound) {
-+            // bedroom, south wall beside the door, facing into the room
-+            sMaskWallPos = { 1060.0f, 330.0f, 197.0f };
-+            sMaskWallYaw = (s16)0x8000;
-+            sMaskWallFound = true;
-+        }
++        UpdateDecorating(play, player);
 +        Vec3f bed = { 865.0f, 260.0f, -112.0f };
 +        sNearDoor = !Play_InCsMode(play) && (Math_Vec3f_DistXZ(&player->actor.world.pos, &bed) < 150.0f) &&
 +                    (fabsf(player->actor.world.pos.y - bed.y) < 60.0f);
@@ -8099,6 +8335,7 @@ index 0000000..b8d1796
 +        if ((player != nullptr) && (player->stateFlags1 & PLAYER_STATE1_8000000)) bits |= ST_SWIMMING;
 +        if (sNearDoor.load()) bits |= ST_AT_HOUSE;
 +        if (sAtHome) bits |= ST_AT_HOME;
++        if (sNearThing.load()) bits |= ST_NEAR_THING;
 +        if (InConversation(play)) bits |= ST_TEXT;
 +    }
 +    if (sSprintOn) bits |= ST_SPRINT;
@@ -8282,6 +8519,10 @@ index 0000000..b8d1796
 +}
 +
 +extern "C" JNIEXPORT void JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmEquipC(JNIEnv*, jobject, jint cSlot, jint inv) {
++    if (cSlot == 7 && inv >= 0 && inv < 48) {
++        sDisplayReq = inv; // hang this on the wall at home
++        return;
++    }
 +    if (cSlot >= 0 && cSlot <= 6 && inv >= 0 && inv < 48) sEquipReq = (cSlot << 8) | inv;
 +}
 +
@@ -8360,6 +8601,7 @@ index 0000000..b8d1796
 +    if (option == 12) sHousePlaceReq = value;  // 1 = house on, 2 = house off
 +    if (option == 13) sRestReq = value;        // rest this many hours (at home)
 +    if (option == 14) sEnterReq = 1;           // go into your house
++    if (option == 15) sPutAwayReq = 1;         // put away the thing you're standing by
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
 +        sOurMap = value;
 +        sMinimapReq = 1;
