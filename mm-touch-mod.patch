@@ -987,10 +987,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..daaa26e
+index 0000000..475a1ea
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2815 @@
+@@ -0,0 +1,2809 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -2718,12 +2718,6 @@ index 0000000..daaa26e
 +            act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +            refreshSettings();
 +        });
-+        TextView houseLabel = settingsRow(settingsPanel, "House (outside Milk Road)", "Off", () -> {
-+            act.nativeMmSetOption(12, 2);
-+        }, "On", () -> {
-+            act.nativeMmSetOption(12, 1);
-+        });
-+        houseLabel.setText("");
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
 +            treeChop = !treeChop;
 +            prefs.edit().putBoolean("treeChop", treeChop).apply();
@@ -6019,10 +6013,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..8a6a11c
+index 0000000..04214ab
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2290 @@
+@@ -0,0 +1,2322 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7309,6 +7303,9 @@ index 0000000..8a6a11c
 +}
 +
 +// ---- the copier
++static std::string sCopyError;   // why the last copy stopped (shown on screen so it can be fixed)
++static int sCopySkipped = 0;     // unknown commands skipped (harmless)
++
 +struct CopiedMesh {
 +    std::vector<Gfx> gfx;                       // our own display list (never resized after building)
 +    std::vector<std::unique_ptr<Vtx[]>> verts;  // our own vertex copies
@@ -7352,12 +7349,22 @@ index 0000000..8a6a11c
 +                uintptr_t off = g.words.w1;
 +                Gfx h = ins[++i];
 +                uint64_t hash = ((uint64_t)(u32)h.words.w0 << 32) + (u32)h.words.w1;
-+                if (n == 0 || end < n || end > 64 || off > 0xFFFFF) return false;
-+                auto res = LoadTyped(HashToPath(hash), Fast::ResourceType::Vertex);
-+                if (res == nullptr) return false;
++                if (n == 0 || end < n || end > 64 || off > 0xFFFFF) {
++                    sCopyError = "bad vertex command";
++                    return false;
++                }
++                std::string vpath = HashToPath(hash);
++                auto res = LoadTyped(vpath, Fast::ResourceType::Vertex);
++                if (res == nullptr) {
++                    sCopyError = "vertices not found: " + (vpath.empty() ? std::string("(unknown hash)") : vpath);
++                    return false;
++                }
 +                auto vres = std::static_pointer_cast<Fast::Vertex>(res);
 +                size_t first = off / sizeof(Vtx);
-+                if (off % sizeof(Vtx) != 0 || first + n > vres->VertexList.size()) return false;
++                if (off % sizeof(Vtx) != 0 || first + n > vres->VertexList.size()) {
++                    sCopyError = "vertex range";
++                    return false;
++                }
 +                std::unique_ptr<Vtx[]> block(new Vtx[n]);
 +                u32 v0 = end - n;
 +                for (u32 k = 0; k < n; k++) {
@@ -7428,8 +7435,12 @@ index 0000000..8a6a11c
 +                if (i + 1 >= ins.size()) return false;
 +                Gfx h = ins[++i];
 +                uint64_t hash = ((uint64_t)(u32)h.words.w0 << 32) + (u32)h.words.w1;
-+                auto res = LoadTyped(HashToPath(hash), Fast::ResourceType::DisplayList);
-+                if (res == nullptr) return false;
++                std::string dpath = HashToPath(hash);
++                auto res = LoadTyped(dpath, Fast::ResourceType::DisplayList);
++                if (res == nullptr) {
++                    sCopyError = "sub-list not found: " + (dpath.empty() ? std::string("(unknown hash)") : dpath);
++                    return false;
++                }
 +                out.keep.push_back(res);
 +                if (!CopyDL(std::static_pointer_cast<Fast::DisplayList>(res).get(), f, out, slots, slotIn, depth + 1))
 +                    return false;
@@ -7467,7 +7478,10 @@ index 0000000..8a6a11c
 +                    out.gfx.push_back(g);
 +                    break;
 +                }
-+                return false; // something unexpected: don't build
++                // anything else (culling hints, other custom commands...) is skipped; triangles only ever use
++                // vertices this copier loaded itself, so nothing can point at unknown data
++                sCopySkipped++;
++                break;
 +        }
 +    }
 +    return true;
@@ -7478,7 +7492,10 @@ index 0000000..8a6a11c
 +    out.gfx.reserve(4096);
 +    for (auto& path : paths) {
 +        auto res = LoadTyped(path, Fast::ResourceType::DisplayList);
-+        if (res == nullptr) return false;
++        if (res == nullptr) {
++            sCopyError = "not a display list: " + path;
++            return false;
++        }
 +        out.keep.push_back(res);
 +        Vtx* slots[64] = {};
 +        bool slotIn[64] = {};
@@ -7492,7 +7509,10 @@ index 0000000..8a6a11c
 +    memset(&end, 0, sizeof(end));
 +    gSPEndDisplayList(&end);
 +    out.gfx.push_back(end);
-+    if (out.gfx.size() > 4000) return false; // far more than a house: something's wrong
++    if (out.gfx.size() > 4000) { // far more than a house: something's wrong
++        sCopyError = "too big";
++        return false;
++    }
 +    out.ok = true;
 +    return true;
 +}
@@ -7502,7 +7522,7 @@ index 0000000..8a6a11c
 +    u32 magic;
 +    s32 valid;
 +};
-+static HouseData sHouse = { 0x48534536, 1 };
++static HouseData sHouse = { 0x48534536, 1 }; // always there (hard-coded)
 +static std::atomic<int> sHousePlaceReq{ 0 }; // 1 = house on, 2 = house off
 +static std::atomic<int> sNearDoor{ 0 };      // by your bed (rest available)
 +static std::atomic<int> sEnterReq{ 0 };
@@ -7544,7 +7564,8 @@ index 0000000..8a6a11c
 +static void LoadHouse() {
 +    std::ifstream f(HousePath(), std::ios::binary);
 +    HouseData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x48534536) sHouse.valid = h.valid;
++    (void)f;
++    (void)h; // the house is hard-coded on
 +}
 +
 +static void SaveHouse() {
@@ -7557,13 +7578,17 @@ index 0000000..8a6a11c
 +}
 +
 +static void TryBuildHouse() {
-+    if (sHouseTried) return;
-+    sHouseTried = true;
++    if (sHouseMesh.ok) return; // built once, kept for the session
++    sCopyError.clear();
++    sCopySkipped = 0;
 +    std::vector<std::string> paths;
 +    for (int off : { 0x0054D8, 0x0034E0 }) { // the house's walls/porch, and the roof piece it shares
 +        std::string p = FindRoomDL("Z2_F01", 0, off);
 +        if (p.empty()) {
-+            Crumb("house: ranch mesh not found");
++            char msg[96];
++            snprintf(msg, sizeof(msg), "House: ranch piece %06X not found", off);
++            Crumb(msg);
++            PostMessage(msg);
 +            return;
 +        }
 +        paths.push_back(p);
@@ -7582,10 +7607,16 @@ index 0000000..8a6a11c
 +    f.tint[2] = 255;
 +    if (!BuildMesh(paths, f, sHouseMesh)) {
 +        sHouseMesh = CopiedMesh();
-+        Crumb("house: copy abandoned (unexpected data) - not drawn");
++        std::string msg = "House: " + (sCopyError.empty() ? std::string("copy failed") : sCopyError);
++        Crumb(msg);
++        PostMessage(msg.c_str()); // tell the player why (so it can be fixed)
 +        return;
 +    }
 +    Crumb("house: built, " + std::to_string(sHouseMesh.gfx.size()) + " commands");
++    // one-time note so we know the copy worked (if the house still isn't visible, it's placement, not data)
++    char msg[96];
++    snprintf(msg, sizeof(msg), "House ready (%d parts)", (int)sHouseMesh.gfx.size());
++    PostMessage(msg);
 +}
 +
 +static void DrawHouse(PlayState* play) {
@@ -7707,15 +7738,10 @@ index 0000000..8a6a11c
 +            sAtHome = false;
 +        }
 +        if (!sAtHome) HideSecondBed(false); // the real ranch house is unchanged
-+        if (play->sceneId == SCENE_00KEIKOKU && sHouse.valid) TryBuildHouse();
++        if (play->sceneId == SCENE_00KEIKOKU) TryBuildHouse(); // tries again on every visit until it works
 +    }
 +
-+    int req = sHousePlaceReq.exchange(0);
-+    if (req == 1 || req == 2) {
-+        sHouse.valid = (req == 1);
-+        SaveHouse();
-+        PostMessage(req == 1 ? "House on (outside Milk Road)" : "House off");
-+    }
++    sHousePlaceReq = 0; // (no on/off any more: the house is part of the world)
 +
 +    sNearDoor = 0;
 +    if (player == nullptr) return;
