@@ -987,10 +987,10 @@ index 0000000..648452a
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
 new file mode 100644
-index 0000000..ba8e35b
+index 0000000..c4361c6
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/ModTouchOverlay.java
-@@ -0,0 +1,2833 @@
+@@ -0,0 +1,2914 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -1039,7 +1039,7 @@ index 0000000..ba8e35b
 +
 +    static final int KIND_N64 = 0, KIND_ACTION = 1, KIND_TRAY = 2, KIND_SKIP = 3, KIND_PANEL = 4, KIND_STICK = 5,
 +            KIND_HUD = 6, KIND_MINIMAP = 7, KIND_WHEEL = 8, KIND_POUND = 9, KIND_MAPVIEW = 10, KIND_DPAD = 11,
-+            KIND_REST = 12, KIND_HOME = 13;
++            KIND_REST = 12, KIND_HOME = 13, KIND_STATION = 14;
 +    static final int STYLE_A = 0, STYLE_B = 1, STYLE_C = 2, STYLE_START = 3, STYLE_PLAIN = 4;
 +
 +    // Zelda HUD palette
@@ -1159,7 +1159,9 @@ index 0000000..ba8e35b
 +    private WheelView wheel;
 +    private MiniMapView miniMap;
 +    private DpadView dpad;
-+    private Ctl restCtl;
++    private Ctl restCtl, stationCtl;
++    private int station = 0;      // 1 stove, 2 wardrobe (from the game)
++    private LinearLayout choicePanel;
 +    private LinearLayout restPanel;
 +    private TextView restHoursLabel;
 +    private int restHours = 6;
@@ -1297,6 +1299,8 @@ index 0000000..ba8e35b
 +        // at home: hang things on the wall / put clutter away
 +        ctls.add(new Ctl("display", "Display", "", KIND_HOME, 1, STYLE_PLAIN, 0.420f, 0.720f, 58));
 +        ctls.add(new Ctl("putaway", "Put away", "", KIND_HOME, 2, STYLE_PLAIN, 0.580f, 0.720f, 58));
++        stationCtl = new Ctl("station", "Use", "", KIND_STATION, 0, STYLE_PLAIN, 0.500f, 0.560f, 62);
++        ctls.add(stationCtl);
 +        dpadCtl = new Ctl("dpad", "", "", KIND_DPAD, 0, STYLE_PLAIN, 0.320f, 0.300f, 110);
 +        ctls.add(dpadCtl);
 +        ctls.add(new Ctl("qload", "Load", "", KIND_ACTION, ACT_QUICKLOAD, STYLE_PLAIN, 0.620f, 0.430f, 50));
@@ -1631,6 +1635,7 @@ index 0000000..ba8e35b
 +            case "rest": return Ornate.ICON_MOON;
 +            case "display": return Ornate.ICON_FRAME;
 +            case "putaway": return Ornate.ICON_BOX;
++            case "station": return Ornate.ICON_POTION;
 +            case "pound": return Ornate.ICON_POUND;
 +            case "qload": return Ornate.ICON_LOAD;
 +            default: return Ornate.ICON_NONE;
@@ -1967,6 +1972,52 @@ index 0000000..ba8e35b
 +    private int lastAction = -99;
 +    private boolean lastAtHouse = false, lastAtHome = false, lastNearThing = false;
 +
++    // ---------------------------------------------------------------- a small "pick one" panel
++    interface Pick {
++        void picked(int index);
++    }
++
++    private void showChoices(String title, String[] labels, int[] swatches, Pick pick) {
++        if (choicePanel != null) root.removeView(choicePanel);
++        choicePanel = new LinearLayout(act);
++        choicePanel.setOrientation(LinearLayout.VERTICAL);
++        choicePanel.setGravity(Gravity.CENTER_HORIZONTAL);
++        choicePanel.setPadding(dp(16), dp(10), dp(16), dp(12));
++        choicePanel.setBackground(panelDrawable());
++        choicePanel.addView(infoLine(title, 17, GOLD, true));
++        LinearLayout row = new LinearLayout(act);
++        row.setGravity(Gravity.CENTER);
++        for (int i = 0; i < labels.length; i++) {
++            final int idx = i;
++            TextView b = editButton(labels[i], v -> {
++                pick.picked(idx);
++                choicePanel.setVisibility(View.GONE);
++            });
++            if (swatches != null) {
++                GradientDrawable d = new GradientDrawable();
++                d.setColor(swatches[i]);
++                d.setCornerRadius(dp(16));
++                d.setStroke(dp(1), Color.argb(150, 255, 255, 255));
++                b.setBackground(d);
++                b.setTextColor(Color.WHITE);
++                b.setShadowLayer(3f, 0f, 1f, Color.BLACK);
++            }
++            row.addView(b);
++            if (swatches == null && i % 1 == 0 && labels.length > 2) {
++                // stack long labels: one per row
++                choicePanel.addView(row);
++                row = new LinearLayout(act);
++                row.setGravity(Gravity.CENTER);
++            }
++        }
++        if (row.getChildCount() > 0) choicePanel.addView(row);
++        choicePanel.addView(editButton("Cancel", v -> choicePanel.setVisibility(View.GONE)));
++        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
++        lp.gravity = Gravity.CENTER;
++        root.addView(choicePanel, lp);
++        choicePanel.bringToFront();
++    }
++
 +    // ---------------------------------------------------------------- resting at your house
 +    private void buildRestPanel() {
 +        restPanel = new LinearLayout(act);
@@ -2062,6 +2113,15 @@ index 0000000..ba8e35b
 +        int[] a = act.nativeMmGetAction();
 +        if (a == null || a.length < 2) return;
 +        heldItemMask = a.length >= 3 ? heldButtonMask(a[2]) : 0;
++        int newStation = a.length >= 4 ? a[3] : 0;
++        if (newStation != station) {
++            station = newStation;
++            if (stationCtl.iconView instanceof Ornate.IconView) {
++                ((Ornate.IconView) stationCtl.iconView).setIcon(station == 2 ? Ornate.ICON_SHIRT : Ornate.ICON_POTION);
++            }
++            if (station == 0 && choicePanel != null) choicePanel.setVisibility(View.GONE);
++            layoutAll();
++        }
 +        if (a[1] != form) {
 +            form = a[1];
 +            releaseSpecial();
@@ -2730,6 +2790,12 @@ index 0000000..ba8e35b
 +            act.nativeMmSetOption(11, tripleJump ? 1 : 0);
 +            refreshSettings();
 +        });
++        TextView houseRow = settingsRow(settingsPanel, "House", null, null, "Open", () -> {
++            showSettings(false);
++            showChoices("House", new String[] { "Undo last change", "Bring everything back",
++                    "Take everything off the walls" }, null, i -> act.nativeMmSetOption(18, i + 1));
++        });
++        houseRow.setText("");
 +        treeLabel = settingsRow(settingsPanel, "Chop down trees", null, null, "Change", () -> {
 +            treeChop = !treeChop;
 +            prefs.edit().putBoolean("treeChop", treeChop).apply();
@@ -3155,6 +3221,12 @@ index 0000000..ba8e35b
 +                if (editing) c.view.setAlpha(1f);
 +                continue;
 +            }
++            if (c.kind == KIND_STATION) {
++                boolean show = editing || (!c.hidden && station != 0);
++                c.view.setVisibility(show ? View.VISIBLE : View.GONE);
++                if (editing) c.view.setAlpha(c.hidden ? 0.25f : 1f);
++                continue;
++            }
 +            if (c.kind == KIND_HOME) {
 +                boolean show = editing || (!c.hidden && (stateBits & ST_AT_HOME) != 0
 +                        && (c.value == 1 || (stateBits & ST_NEAR_THING) != 0));
@@ -3357,6 +3429,14 @@ index 0000000..ba8e35b
 +                c.latchedPress = false;
 +                switch (c.kind) {
 +                    case KIND_WHEEL: openWheel(); break;
++                    case KIND_STATION:
++                        if (station == 1) showChoices("Brew a potion", new String[] { "Red Potion (health)",
++                                "Green Potion (magic)", "Blue Potion (both)" }, null, i -> act.nativeMmSetOption(16, i + 1));
++                        else if (station == 2) showChoices("Change tunic", new String[] { "Green", "Blue", "Red", "Purple",
++                                "Black", "White" }, new int[] { Color.rgb(30, 105, 27), Color.rgb(40, 80, 200), Color.rgb(190, 40, 40),
++                                Color.rgb(110, 45, 150), Color.rgb(45, 45, 50), Color.rgb(225, 225, 220) },
++                                i -> act.nativeMmSetOption(17, i));
++                        break;
 +                    case KIND_HOME:
 +                        if (c.value == 1) openWheel(true);
 +                        else act.nativeMmSetOption(15, 1);
@@ -3514,6 +3594,7 @@ index 0000000..ba8e35b
 +            case KIND_DPAD: return "D-pad shortcuts";
 +            case KIND_REST: return "Rest (by your bed)";
 +            case KIND_HOME: return c.value == 1 ? "Display (at home)" : "Put away (at home)";
++            case KIND_STATION: return "Stove / wardrobe (at home)";
 +            case KIND_POUND: return "mask special (shows in mask forms)";
 +            default: return c.sub.isEmpty() ? c.label : c.sub;
 +        }
@@ -3826,10 +3907,10 @@ index 0000000..ba8e35b
 +}
 diff --git a/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
 new file mode 100644
-index 0000000..95cca0a
+index 0000000..3571a00
 --- /dev/null
 +++ b/Android/app/src/main/java/com/twoshipfork/mm/Ornate.java
-@@ -0,0 +1,741 @@
+@@ -0,0 +1,771 @@
 +package com.twoshipfork.mm;
 +
 +import android.content.Context;
@@ -4172,7 +4253,8 @@ index 0000000..95cca0a
 +    static final int ICON_NONE = 0, ICON_SWORD = 1, ICON_SHIELD = 2, ICON_RUN = 3, ICON_JUMP = 4, ICON_TARGET = 5,
 +            ICON_MAP = 6, ICON_DOTS = 7, ICON_FAIRY = 8, ICON_HAND = 9, ICON_SAVE = 10, ICON_LOAD = 11, ICON_PLUS = 12,
 +            ICON_POUND = 13, ICON_BOLT = 14, ICON_BUBBLE = 15, ICON_BEAM = 16,
-+            ICON_HORSE = 17, ICON_MOON = 18, ICON_DOOR = 19, ICON_FRAME = 20, ICON_BOX = 21;
++            ICON_HORSE = 17, ICON_MOON = 18, ICON_DOOR = 19, ICON_FRAME = 20, ICON_BOX = 21,
++            ICON_POTION = 22, ICON_SHIRT = 23;
 +
 +    /** Cream-coloured vector icon with a soft dark shadow, drawn to fit the view. */
 +    static final class IconView extends View {
@@ -4235,6 +4317,8 @@ index 0000000..95cca0a
 +                case ICON_DOOR: door(c, s); break;
 +                case ICON_FRAME: frame(c, s); break;
 +                case ICON_BOX: box(c, s); break;
++                case ICON_POTION: potion(c, s); break;
++                case ICON_SHIRT: shirt(c, s); break;
 +            }
 +            c.restore();
 +        }
@@ -4377,6 +4461,33 @@ index 0000000..95cca0a
 +            p.lineTo(s * 0.66f, s * 0.3f);
 +            c.drawPath(p, stroke);
 +            c.drawCircle(s * 0.5f, s * 0.54f, s * 0.09f, fill);
++        }
++
++        // Brew: a round potion bottle with a cork
++        private void potion(Canvas c, float s) {
++            c.drawCircle(s * 0.5f, s * 0.6f, s * 0.24f, fill);
++            c.drawRect(s * 0.43f, s * 0.22f, s * 0.57f, s * 0.4f, fill);
++            accent.setStyle(Paint.Style.FILL);
++            c.drawRect(s * 0.41f, s * 0.14f, s * 0.59f, s * 0.22f, accent);
++            accent.setStyle(Paint.Style.STROKE);
++        }
++
++        // Wardrobe: a tunic
++        private void shirt(Canvas c, float s) {
++            p.reset();
++            p.moveTo(s * 0.36f, s * 0.18f);
++            p.lineTo(s * 0.18f, s * 0.32f);
++            p.lineTo(s * 0.26f, s * 0.46f);
++            p.lineTo(s * 0.34f, s * 0.42f);
++            p.lineTo(s * 0.34f, s * 0.84f);
++            p.lineTo(s * 0.66f, s * 0.84f);
++            p.lineTo(s * 0.66f, s * 0.42f);
++            p.lineTo(s * 0.74f, s * 0.46f);
++            p.lineTo(s * 0.82f, s * 0.32f);
++            p.lineTo(s * 0.64f, s * 0.18f);
++            p.quadTo(s * 0.5f, s * 0.3f, s * 0.36f, s * 0.18f);
++            p.close();
++            c.drawPath(p, fill);
 +        }
 +
 +        // Put away: a box with its lid
@@ -6087,10 +6198,10 @@ index 0000000..41e8575
 +#endif
 diff --git a/mm/2s2h/Enhancements/Touch/MMTouch.cpp b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
 new file mode 100644
-index 0000000..209b7e9
+index 0000000..a102a2a
 --- /dev/null
 +++ b/mm/2s2h/Enhancements/Touch/MMTouch.cpp
-@@ -0,0 +1,2526 @@
+@@ -0,0 +1,2767 @@
 +// Majora's Mask touch mod - game side.
 +//  Touch buttons -> pad injection, jump, sprint, quick save/load, fast travel map, tap-to-skip cutscenes,
 +//  ocarina song auto-play, unlimited diving, and the glue for the quest tracker (MMQuest.c).
@@ -7352,6 +7463,7 @@ index 0000000..209b7e9
 +#include "fast/lus_gbi.h"
 +#include "2s2h/resource/type/Array.h"
 +#include "2s2h/resource/type/2shResourceType.h"
++#include "2s2h/CustomMessage/CustomMessage.h"
 +extern "C" uint8_t ResourceMgr_FileExists(const char* resName);
 +extern "C" void ResourceMgr_PatchGfxByName(const char* path, const char* patchName, int index, Gfx instruction);
 +extern "C" void ResourceMgr_UnpatchGfxByName(const char* path, const char* patchName);
@@ -7422,6 +7534,19 @@ index 0000000..209b7e9
 +    // keep a triangle only if all its corners are inside this rotated rectangle (source coordinates)
 +    f32 cx, cz, cosA, sinA, halfX, halfZ, yMin, yMax;
 +    u8 tint[3]; // vertex colour multiplier (out of 255)
++    Vec3f exclude[4]; // leave out triangles centred within excludeR of these (e.g. the ranch emblem)
++    s32 excludeN = 0;
++    f32 excludeR = 0.0f;
++    bool bothSides = false; // draw both faces (for the door)
++    bool Excluded(const Vtx* a, const Vtx* b, const Vtx* c) const {
++        f32 x = (a->v.ob[0] + b->v.ob[0] + c->v.ob[0]) / 3.0f, y = (a->v.ob[1] + b->v.ob[1] + c->v.ob[1]) / 3.0f;
++        f32 z = (a->v.ob[2] + b->v.ob[2] + c->v.ob[2]) / 3.0f;
++        for (s32 i = 0; i < excludeN; i++) {
++            f32 dx = x - exclude[i].x, dy = y - exclude[i].y, dz = z - exclude[i].z;
++            if (dx * dx + dy * dy + dz * dz < excludeR * excludeR) return true;
++        }
++        return false;
++    }
 +    bool Inside(const Vtx& v) const {
 +        f32 dx = v.v.ob[0] - cx, dz = v.v.ob[2] - cz;
 +        f32 lx = dx * cosA - dz * sinA, lz = dx * sinA + dz * cosA;
@@ -7517,7 +7642,8 @@ index 0000000..209b7e9
 +            }
 +            case 0x05: { // one triangle
 +                u8 a = ((g.words.w0 >> 16) & 0xFF) / 2, b = ((g.words.w0 >> 8) & 0xFF) / 2, c = (g.words.w0 & 0xFF) / 2;
-+                if (a < 64 && b < 64 && c < 64 && slots[a] && slots[b] && slots[c] && slotIn[a] && slotIn[b] && slotIn[c]) {
++                if (a < 64 && b < 64 && c < 64 && slots[a] && slots[b] && slots[c] && slotIn[a] && slotIn[b] && slotIn[c] &&
++                    !f.Excluded(slots[a], slots[b], slots[c])) {
 +                    out.gfx.push_back(MakeTri1(a, b, c));
 +                }
 +                break;
@@ -7528,7 +7654,7 @@ index 0000000..209b7e9
 +                for (int t = 0; t < 2; t++) {
 +                    u8 a = ((w[t] >> 16) & 0xFF) / 2, b = ((w[t] >> 8) & 0xFF) / 2, c = (w[t] & 0xFF) / 2;
 +                    if (a < 64 && b < 64 && c < 64 && slots[a] && slots[b] && slots[c] && slotIn[a] && slotIn[b] &&
-+                        slotIn[c]) {
++                        slotIn[c] && !f.Excluded(slots[a], slots[b], slots[c])) {
 +                        out.gfx.push_back(MakeTri1(a, b, c));
 +                    }
 +                }
@@ -7586,6 +7712,10 @@ index 0000000..209b7e9
 +            default:
 +                // plain render-state commands (combiner, modes, tiles, colours, loads, syncs, geometry mode...)
 +                if (op >= 0xD7 || op == 0xD9 || op == 0xDB) {
++                    if (op == 0xD9 && f.bothSides) {
++                        g.words.w0 &= ~(uintptr_t)G_CULL_BOTH; // geometry mode: never turn culling on
++                        g.words.w1 &= ~(uintptr_t)G_CULL_BOTH;
++                    }
 +                    out.gfx.push_back(g);
 +                    break;
 +                }
@@ -7715,6 +7845,9 @@ index 0000000..209b7e9
 +    f.halfZ = 290.0f;
 +    f.yMin = 240.0f;
 +    f.yMax = 1100.0f;
++    f.exclude[0] = { -1252.0f, 316.0f, -1485.0f }; // the Romani Ranch emblem beside the door
++    f.excludeN = 1;
++    f.excludeR = 30.0f;
 +    f.tint[0] = 205; // a cool blue-grey, so it's Link's own house and not the ranch's
 +    f.tint[1] = 225;
 +    f.tint[2] = 255;
@@ -7741,6 +7874,7 @@ index 0000000..209b7e9
 +    all.yMin = -100000.0f;
 +    all.yMax = 100000.0f;
 +    all.tint[0] = all.tint[1] = all.tint[2] = 255;
++    all.bothSides = true;
 +    if (!BuildMesh({ std::string("objects/gameplay_keep/gDoorLeftDL") }, all, sDoorMesh)) {
 +        sDoorMesh = CopiedMesh(); // no door model available: the doorway stays open (still works)
 +        Crumb("door: " + sCopyError);
@@ -7759,7 +7893,7 @@ index 0000000..209b7e9
 +    if (sDoorMesh.ok) {
 +        // closed wooden door in the doorway, facing west (the door model stands on its edge, 60 wide x 100 tall)
 +        Gfx_SetupDL25_Opa(play->state.gfxCtx);
-+        Matrix_Translate(HOUSE_DOOR_X, HOUSE_Y, HOUSE_DOOR_Z, MTXMODE_NEW);
++        Matrix_Translate(HOUSE_X - 223.0f, HOUSE_Y, HOUSE_DOOR_Z, MTXMODE_NEW); // flush with the outside wall
 +        Matrix_RotateYS(-0x4000, MTXMODE_APPLY);
 +        Matrix_RotateXS(-0x4000, MTXMODE_APPLY);
 +        Matrix_Scale(0.01f, 0.01f, 0.01f, MTXMODE_APPLY);
@@ -7797,9 +7931,14 @@ index 0000000..209b7e9
 +    std::string path;
 +};
 +static Clutter sClutter[] = {
-+    { 2, 0x005A00, 1163, 260, 24 },  // milk cans, bedroom
-+    { 2, 0x006978, 990, 260, -140 }, // little things on the shelves, bedroom
-+    { 1, 0x004C60, 1095, 0, -164 },  // milk cans, downstairs
++    { 2, 0x005A00, 1163, 260, 24 },   // milk cans, bedroom
++    { 2, 0x006978, 990, 260, -140 },  // little things on the shelves, bedroom
++    { 1, 0x004C60, 1095, 0, -164 },   // milk cans, downstairs
++    { 2, 0x0033B8, 1160, 260, -90 },  // vanity (with its mirror) and chest of drawers, bedroom
++    { 2, 0x009328, 1160, 260, -90 },  //   (the mirror glass)
++    { 2, 0x003E20, 1165, 260, 125 },  // cupboard and side table, bedroom
++    { 2, 0x009630, 1165, 260, 125 },  //   (its glass)
++    { 1, 0x0056E0, 1165, 0, -120 },   // crates and boxes, downstairs
 +};
 +#define CLUTTER_COUNT (s32)(sizeof(sClutter) / sizeof(sClutter[0]))
 +struct Hung {
@@ -7808,13 +7947,14 @@ index 0000000..209b7e9
 +};
 +struct HomeData {
 +    u32 magic;
-+    u8 tidied[8];
++    u8 tidied[16];
 +    u8 count;
 +    Hung hung[48];
 +};
-+static HomeData sHome = { 0x484F4D31 };
++static HomeData sHome = { 0x484F4D32 };
++static std::vector<std::pair<int, Hung>> sHomeUndo; // what you did, newest last: (+1 hung / -1 took down / 2+i tidied)
 +static bool sHomeLoaded = false;
-+static bool sClutterHidden[8] = {};
++static bool sClutterHidden[16] = {};
 +static std::atomic<int> sNearThing{ 0 };      // standing by something you can put away
 +static std::atomic<int> sPutAwayReq{ 0 };
 +static std::atomic<int> sDisplayReq{ -1 };     // inventory slot to hang up
@@ -7828,7 +7968,7 @@ index 0000000..209b7e9
 +    sHomeLoaded = true;
 +    std::ifstream f(HomePath(), std::ios::binary);
 +    HomeData h = {};
-+    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x484F4D31 && h.count <= 48) sHome = h;
++    if (f && f.read((char*)&h, sizeof(h)) && h.magic == 0x484F4D32 && h.count <= 48) sHome = h;
 +}
 +
 +static void SaveHome() {
@@ -7837,7 +7977,7 @@ index 0000000..209b7e9
 +}
 +
 +static void ShowClutter(bool atHome) {
-+    for (s32 i = 0; i < CLUTTER_COUNT && i < 8; i++) {
++    for (s32 i = 0; i < CLUTTER_COUNT && i < 16; i++) {
 +        bool hide = atHome && sHome.tidied[i];
 +        if (hide == sClutterHidden[i]) continue;
 +        if (sClutter[i].path.empty()) sClutter[i].path = FindRoomDL("Z2_OMOYA", sClutter[i].room, sClutter[i].offset);
@@ -7879,10 +8019,17 @@ index 0000000..209b7e9
 +    sNearThing = (nearClutter >= 0 || nearHung >= 0) ? 1 : 0;
 +    if (sPutAwayReq.exchange(0)) {
 +        if (nearHung >= 0) {
++            sHomeUndo.push_back({ -1, sHome.hung[nearHung] });
 +            sHome.hung[nearHung] = sHome.hung[--sHome.count];
 +            PostMessage("Taken down");
 +        } else if (nearClutter >= 0) {
-+            sHome.tidied[nearClutter] = 1;
++            // things that belong together (a vanity and its mirror glass) go together
++            for (s32 i = 0; i < CLUTTER_COUNT; i++) {
++                if (!sHome.tidied[i] && sClutter[i].x == sClutter[nearClutter].x && sClutter[i].z == sClutter[nearClutter].z) {
++                    sHome.tidied[i] = 1;
++                    sHomeUndo.push_back({ 2 + i, Hung{} });
++                }
++            }
 +            ShowClutter(true);
 +            PostMessage("Put away");
 +        }
@@ -7915,9 +8062,156 @@ index 0000000..209b7e9
 +        h.z = (s16)(hit.z - Math_CosS(yaw) * 3.0f);
 +        h.yaw = (s16)(yaw + 0x8000); // facing back into the room
 +        sHome.hung[sHome.count++] = h;
++        sHomeUndo.push_back({ 1, h });
 +        SaveHome();
 +        Audio_PlaySfx(NA_SE_SY_DECIDE);
 +        PostMessage("Hung on the wall");
++    }
++}
++
++// House menu: undo, bring everything back, take everything off the walls
++static std::atomic<int> sHouseMenuReq{ 0 };
++
++static void HouseMenuAction(int what) {
++    LoadHome();
++    if (what == 1) { // undo the last thing
++        if (sHomeUndo.empty()) {
++            PostMessage("Nothing to undo");
++            return;
++        }
++        auto last = sHomeUndo.back();
++        sHomeUndo.pop_back();
++        if (last.first == 1 && sHome.count > 0) {
++            for (s32 i = sHome.count - 1; i >= 0; i--) {
++                if (memcmp(&sHome.hung[i], &last.second, sizeof(Hung)) == 0) {
++                    sHome.hung[i] = sHome.hung[--sHome.count];
++                    break;
++                }
++            }
++        } else if (last.first == -1 && sHome.count < 48) {
++            sHome.hung[sHome.count++] = last.second;
++        } else if (last.first >= 2) {
++            s32 base = last.first - 2;
++            for (s32 i = 0; i < CLUTTER_COUNT; i++) {
++                if (sClutter[i].x == sClutter[base].x && sClutter[i].z == sClutter[base].z) sHome.tidied[i] = 0;
++            }
++            while (!sHomeUndo.empty() && sHomeUndo.back().first >= 2 &&
++                   sClutter[sHomeUndo.back().first - 2].x == sClutter[base].x) {
++                sHomeUndo.pop_back(); // the rest of the same group
++            }
++        }
++        PostMessage("Undone");
++    } else if (what == 2) {
++        memset(sHome.tidied, 0, sizeof(sHome.tidied));
++        PostMessage("Everything's back in its place");
++    } else if (what == 3) {
++        sHome.count = 0;
++        PostMessage("Everything taken off the walls");
++    }
++    SaveHome();
++    if (sAtHome) ShowClutter(true);
++}
++
++// Stations in your home: the stove (brew potions) and the wardrobe (tunic colour)
++static std::atomic<int> sStation{ 0 }; // 1 stove, 2 wardrobe
++static std::atomic<int> sBrewReq{ 0 }, sTunicReq{ -1 };
++
++static void Brew(PlayState* play, int kind) {
++    static const u8 potions[] = { 0, ITEM_POTION_RED, ITEM_POTION_GREEN, ITEM_POTION_BLUE };
++    if (kind < 1 || kind > 3) return;
++    for (s32 slot = SLOT_BOTTLE_1; slot <= SLOT_BOTTLE_6; slot++) {
++        if (gSaveContext.save.saveInfo.inventory.items[slot] != ITEM_BOTTLE) continue;
++        gSaveContext.save.saveInfo.inventory.items[slot] = potions[kind];
++        // if that bottle is on a C button, show the potion there
++        for (s32 b = EQUIP_SLOT_C_LEFT; b <= EQUIP_SLOT_C_RIGHT; b++) {
++            if (C_SLOT_EQUIP(0, b) == slot) {
++                BUTTON_ITEM_EQUIP(0, b) = potions[kind];
++                Interface_LoadItemIconImpl(play, b);
++            }
++        }
++        Audio_PlaySfx(NA_SE_SY_GET_ITEM);
++        PostMessage(kind == 1 ? "Brewed a Red Potion" : (kind == 2 ? "Brewed a Green Potion" : "Brewed a Blue Potion"));
++        return;
++    }
++    PostMessage("You need an empty bottle");
++}
++
++static void SetTunic(int colour) {
++    static const u8 rgb[][3] = { { 30, 105, 27 }, { 40, 80, 200 }, { 190, 40, 40 }, { 110, 45, 150 }, { 45, 45, 50 },
++                                 { 225, 225, 220 } };
++    if (colour < 0 || colour > 5) return;
++    if (colour == 0) {
++        CVarSetInteger("gCosmetic.Player.HumanTunic.Changed", 0); // the classic green
++    } else {
++        Color_RGBA8 c = { rgb[colour][0], rgb[colour][1], rgb[colour][2], 255 };
++        CVarSetColor("gCosmetic.Player.HumanTunic.Color", c);
++        CVarSetInteger("gCosmetic.Player.HumanTunic.Changed", 1);
++    }
++    ShipInit::Init("gCosmetic.Player.HumanTunic.Color");
++    ShipInit::Init("gCosmetic.Player.HumanTunic.Changed");
++    CVarSave();
++    Audio_PlaySfx(NA_SE_SY_DECIDE);
++    PostMessage("New tunic!");
++}
++
++// Get-item models: the proper 3D models of items and masks, for hanging on the walls
++static s16 GetItemModel(u8 item) {
++    switch (item) {
++        case ITEM_MASK_DEKU: return GID_MASK_DEKU;
++        case ITEM_MASK_GORON: return GID_MASK_GORON;
++        case ITEM_MASK_ZORA: return GID_MASK_ZORA;
++        case ITEM_MASK_FIERCE_DEITY: return GID_MASK_FIERCE_DEITY;
++        case ITEM_MASK_TRUTH: return GID_MASK_TRUTH;
++        case ITEM_MASK_KAFEIS_MASK: return GID_MASK_KAFEIS_MASK;
++        case ITEM_MASK_ALL_NIGHT: return GID_MASK_ALL_NIGHT;
++        case ITEM_MASK_BUNNY: return GID_MASK_BUNNY;
++        case ITEM_MASK_KEATON: return GID_MASK_KEATON;
++        case ITEM_MASK_GARO: return GID_MASK_GARO;
++        case ITEM_MASK_ROMANI: return GID_MASK_ROMANI;
++        case ITEM_MASK_CIRCUS_LEADER: return GID_MASK_CIRCUS_LEADER;
++        case ITEM_MASK_POSTMAN: return GID_MASK_POSTMAN;
++        case ITEM_MASK_COUPLE: return GID_MASK_COUPLE;
++        case ITEM_MASK_GREAT_FAIRY: return GID_MASK_GREAT_FAIRY;
++        case ITEM_MASK_GIBDO: return GID_MASK_GIBDO;
++        case ITEM_MASK_DON_GERO: return GID_MASK_DON_GERO;
++        case ITEM_MASK_KAMARO: return GID_MASK_KAMARO;
++        case ITEM_MASK_CAPTAIN: return GID_MASK_CAPTAIN;
++        case ITEM_MASK_STONE: return GID_MASK_STONE;
++        case ITEM_MASK_BREMEN: return GID_MASK_BREMEN;
++        case ITEM_MASK_BLAST: return GID_MASK_BLAST;
++        case ITEM_MASK_SCENTS: return GID_MASK_SCENTS;
++        case ITEM_MASK_GIANT: return GID_MASK_GIANT;
++        case ITEM_OCARINA_OF_TIME: return GID_OCARINA;
++        case ITEM_BOW: return GID_BOW;
++        case ITEM_ARROW_FIRE: return GID_ARROW_FIRE;
++        case ITEM_ARROW_ICE: return GID_ARROW_ICE;
++        case ITEM_ARROW_LIGHT: return GID_ARROW_LIGHT;
++        case ITEM_BOMB: return GID_BOMB;
++        case ITEM_BOMBCHU: return GID_BOMBCHU;
++        case ITEM_DEKU_STICK: return GID_DEKU_STICK;
++        case ITEM_DEKU_NUT: return GID_DEKU_NUTS;
++        case ITEM_MAGIC_BEANS: return GID_MAGIC_BEANS;
++        case ITEM_POWDER_KEG: return GID_POWDER_KEG;
++        case ITEM_PICTOGRAPH_BOX: return GID_PICTOGRAPH_BOX;
++        case ITEM_LENS_OF_TRUTH: return GID_LENS;
++        case ITEM_HOOKSHOT: return GID_HOOKSHOT;
++        case ITEM_SWORD_GREAT_FAIRY: return GID_SWORD_GREAT_FAIRY;
++        case ITEM_BOTTLE: return GID_BOTTLE;
++        case ITEM_POTION_RED: return GID_POTION_RED;
++        case ITEM_POTION_GREEN: return GID_POTION_GREEN;
++        case ITEM_POTION_BLUE: return GID_POTION_BLUE;
++        case ITEM_MILK_BOTTLE: return GID_MILK;
++        case ITEM_CHATEAU: return GID_CHATEAU;
++        case ITEM_MOONS_TEAR: return GID_MOONS_TEAR;
++        case ITEM_DEED_LAND: return GID_DEED_LAND;
++        case ITEM_DEED_SWAMP: return GID_DEED_SWAMP;
++        case ITEM_DEED_MOUNTAIN: return GID_DEED_MOUNTAIN;
++        case ITEM_DEED_OCEAN: return GID_DEED_OCEAN;
++        case ITEM_ROOM_KEY: return GID_ROOM_KEY;
++        case ITEM_LETTER_MAMA: return GID_LETTER_MAMA;
++        case ITEM_LETTER_TO_KAFEI: return GID_LETTER_TO_KAFEI;
++        case ITEM_PENDANT_OF_MEMORIES: return GID_PENDANT_OF_MEMORIES;
++        default: return GID_NONE;
 +    }
 +}
 +
@@ -7953,6 +8247,7 @@ index 0000000..209b7e9
 +    gSPTexture(POLY_OPA_DISP++, 0xFFFF, 0xFFFF, 0, G_TX_RENDERTILE, G_ON);
 +    for (s32 i = 0; i < sHome.count; i++) {
 +        Hung& h = sHome.hung[i];
++        if (GetItemModel(h.item) != GID_NONE) continue; // drawn as a 3D model below
 +        if (h.item >= 131 || gItemIcons[h.item] == NULL) continue;
 +        Matrix_Translate(h.x, h.y, h.z, MTXMODE_NEW);
 +        Matrix_RotateYS(h.yaw, MTXMODE_APPLY);
@@ -7964,6 +8259,16 @@ index 0000000..209b7e9
 +        gSP2Triangles(POLY_OPA_DISP++, 0, 1, 2, 0, 0, 2, 3, 0);
 +    }
 +    CLOSE_DISPS(play->state.gfxCtx);
++    // the proper 3D models (masks, weapons, bottles...), hung facing into the room
++    for (s32 i = 0; i < sHome.count; i++) {
++        Hung& h = sHome.hung[i];
++        s16 gid = GetItemModel(h.item);
++        if (gid == GID_NONE) continue;
++        Matrix_Translate(h.x, h.y, h.z, MTXMODE_NEW);
++        Matrix_RotateYS(h.yaw, MTXMODE_APPLY);
++        Matrix_Scale(0.3f, 0.3f, 0.3f, MTXMODE_APPLY);
++        GetItem_Draw(play, gid);
++    }
 +}
 +
 +// Put Link somewhere exact, via the game's own "respawn here" mechanism
@@ -7995,6 +8300,23 @@ index 0000000..209b7e9
 +    else p->z = z1;
 +}
 +
++// The area name when you walk into your home
++static void HomeTitle(u16* textId, bool* loadFromMessageTable) {
++    if (!(sGoingHome || sAtHome)) return;
++    auto entry = CustomMessage::LoadVanillaMessageTableEntry(*textId);
++    std::string& m = entry.msg;
++    size_t at = m.find("Mama's House");
++    if (at != std::string::npos) {
++        m.replace(at, 12, "Link's House");
++    } else if ((at = m.find("Mama")) != std::string::npos) {
++        m.replace(at, 4, "Link");
++    } else {
++        return; // unexpected text: leave it alone
++    }
++    CustomMessage::LoadCustomMessageIntoFont(entry);
++    *loadFromMessageTable = false;
++}
++
 +static void UpdateHouse(PlayState* play) {
 +    Player* player = GET_PLAYER(play);
 +    if (play->sceneId != sHouseSceneSeen) {
@@ -8021,6 +8343,9 @@ index 0000000..209b7e9
 +
 +    sNearDoor = 0;
 +    sNearThing = 0;
++    sStation = 0;
++    int menu = sHouseMenuReq.exchange(0);
++    if (menu > 0) HouseMenuAction(menu);
 +    if (player == nullptr) return;
 +
 +    // ---- inside your home
@@ -8028,6 +8353,20 @@ index 0000000..209b7e9
 +        for (Actor* a = play->actorCtx.actorLists[ACTORCAT_NPC].first; a != nullptr; a = a->next) Actor_Kill(a);
 +        HideSecondBed(true);
 +        UpdateDecorating(play, player);
++        // stove (kitchen, downstairs) and wardrobe (bedroom)
++        Vec3f stove = { 695.0f, 0.0f, 120.0f }, wardrobe = { 1110.0f, 260.0f, -120.0f };
++        if (Math_Vec3f_DistXZ(&player->actor.world.pos, &stove) < 110.0f && fabsf(player->actor.world.pos.y - stove.y) < 60.0f) {
++            sStation = 1;
++        } else if (Math_Vec3f_DistXZ(&player->actor.world.pos, &wardrobe) < 100.0f &&
++                   fabsf(player->actor.world.pos.y - wardrobe.y) < 60.0f) {
++            sStation = 2;
++        } else {
++            sStation = 0;
++        }
++        int brew = sBrewReq.exchange(0);
++        if (brew > 0 && sStation.load() == 1) Brew(play, brew);
++        int tunic = sTunicReq.exchange(-1);
++        if (tunic >= 0 && sStation.load() == 2) SetTunic(tunic);
 +        Vec3f bed = { 865.0f, 260.0f, -112.0f };
 +        sNearDoor = !Play_InCsMode(play) && (Math_Vec3f_DistXZ(&player->actor.world.pos, &bed) < 150.0f) &&
 +                    (fabsf(player->actor.world.pos.y - bed.y) < 60.0f);
@@ -8042,6 +8381,15 @@ index 0000000..209b7e9
 +
 +    // ---- outside: solid walls; walking into the door takes you in
 +    if (HouseHere(play)) {
++        // no grass tufts around your house
++        for (s32 cat = 0; cat < ACTORCAT_MAX; cat++) {
++            for (Actor* a = play->actorCtx.actorLists[cat].first; a != nullptr; a = a->next) {
++                if ((a->id == ACTOR_EN_KUSA || a->id == ACTOR_OBJ_GRASS || a->id == ACTOR_EN_KUSA2) &&
++                    fabsf(a->world.pos.x - HOUSE_X) < 700.0f && fabsf(a->world.pos.z - HOUSE_Z) < 800.0f) {
++                    Actor_Kill(a);
++                }
++            }
++        }
 +        PushOutOfHouse(&player->actor.world.pos);
 +        if (player->rideActor != nullptr) PushOutOfHouse(&player->rideActor->world.pos);
 +        bool atDoor = (fabsf(player->actor.world.pos.x - (HOUSE_X - HOUSE_HALF_X - 12)) < 20.0f) &&
@@ -8392,6 +8740,7 @@ index 0000000..209b7e9
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPassPlayerInputs>(OnPlayerInputs);
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnGameStateUpdate>(OnGameStateUpdate);
 +        GameInteractor::Instance->RegisterGameHook<GameInteractor::OnPlayDrawWorldEnd>(DrawWorldExtras);
++        GameInteractor::Instance->RegisterGameHookForID<GameInteractor::OnOpenText>(0x0132, HomeTitle);
 +        LoadHouse();
 +        ReadSnapshotFile();
 +    }
@@ -8489,9 +8838,9 @@ index 0000000..209b7e9
 +// { A button action (DO_ACTION_*), current form (PLAYER_FORM_*), button of the item in hand
 +//   (1-3 = C left/down/right, 5-8 = D-pad right/left/down/up, else none) }
 +extern "C" JNIEXPORT jintArray JNICALL Java_com_twoshipfork_mm_MainActivity_nativeMmGetAction(JNIEnv* env, jobject) {
-+    jint vals[3] = { sAAction.load(), sForm.load(), sHeldItemButton.load() };
-+    jintArray arr = env->NewIntArray(3);
-+    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 3, vals);
++    jint vals[4] = { sAAction.load(), sForm.load(), sHeldItemButton.load(), sStation.load() };
++    jintArray arr = env->NewIntArray(4);
++    if (arr != nullptr) env->SetIntArrayRegion(arr, 0, 4, vals);
 +    return arr;
 +}
 +
@@ -8602,6 +8951,9 @@ index 0000000..209b7e9
 +    if (option == 13) sRestReq = value;        // rest this many hours (at home)
 +    if (option == 14) sEnterReq = 1;           // go into your house
 +    if (option == 15) sPutAwayReq = 1;         // put away the thing you're standing by
++    if (option == 16) sBrewReq = value;        // 1 red, 2 green, 3 blue potion (at the stove)
++    if (option == 17) sTunicReq = value;       // tunic colour (at the wardrobe)
++    if (option == 18) sHouseMenuReq = value;   // 1 undo, 2 bring everything back, 3 take down all
 +    if (option == 5) {                    // 1 = our mini-map (the game's is hidden), 0 = the game's
 +        sOurMap = value;
 +        sMinimapReq = 1;
